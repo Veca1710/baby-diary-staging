@@ -3110,17 +3110,24 @@ async function ensureCloudFamilyCreated(){
   }
 
   const clean=prepareStateForCloud();
+  const updatedAt=new Date().toISOString();
+
   await supabaseFetch("app_snapshots?on_conflict=family_id",{
     method:"POST",
     headers:{"Prefer":"resolution=merge-duplicates,return=representation"},
     body:JSON.stringify({
       family_id:familyId,
       data:clean,
-      updated_at:new Date().toISOString(),
+      updated_at:updatedAt,
       updated_by:getParentName()
     })
   });
 
+  state.updatedAt=updatedAt;
+  localStorage.setItem(KEY,JSON.stringify(state));
+  localStorage.setItem(CLOUD_LAST_REMOTE_KEY,updatedAt);
+
+  startCloudPolling();
   return familyId;
 }
 
@@ -3160,6 +3167,8 @@ async function saveCloudState(){
 
     state.updatedAt=updatedAt;
     localStorage.setItem(KEY,JSON.stringify(state));
+
+    lastRemoteUpdatedAt=updatedAt;
     localStorage.setItem(CLOUD_LAST_REMOTE_KEY,updatedAt);
   }catch(error){
     console.warn("Cloud save failed",error);
@@ -3185,27 +3194,26 @@ async function loadCloudState(showToast=true){
 
     const remoteData=rows[0].data;
     const remoteUpdatedAt=rows[0].updated_at||remoteData.updatedAt||"";
-    const localUpdatedAt=state?.updatedAt||"";
     const remoteTime=remoteUpdatedAt?new Date(remoteUpdatedAt).getTime():0;
-    const localTime=localUpdatedAt?new Date(localUpdatedAt).getTime():0;
+    const lastSeenTime=lastRemoteUpdatedAt?new Date(lastRemoteUpdatedAt).getTime():0;
 
-    if(remoteTime>localTime){
-      const remoteCloud=remoteData.cloud||{};
-      const remoteEvent=remoteCloud.lastEvent||null;
-      const isOwnUpdate=remoteCloud.deviceId===getDeviceId() || remoteEvent?.deviceId===getDeviceId();
+    if(!remoteTime || remoteTime<=lastSeenTime) return;
 
-      state=normalizeMultiBaby(remoteData);
-      state.updatedAt=remoteUpdatedAt;
+    const remoteCloud=remoteData.cloud||{};
+    const remoteEvent=remoteCloud.lastEvent||null;
+    const isOwnUpdate=remoteCloud.deviceId===getDeviceId() || remoteEvent?.deviceId===getDeviceId();
 
-      localStorage.setItem(KEY,JSON.stringify(state));
-      lastRemoteUpdatedAt=remoteUpdatedAt;
-      localStorage.setItem(CLOUD_LAST_REMOTE_KEY,remoteUpdatedAt);
+    state=normalizeMultiBaby(remoteData);
+    state.updatedAt=remoteUpdatedAt;
 
-      renderDiary();
+    localStorage.setItem(KEY,JSON.stringify(state));
+    lastRemoteUpdatedAt=remoteUpdatedAt;
+    localStorage.setItem(CLOUD_LAST_REMOTE_KEY,remoteUpdatedAt);
 
-      if(showToast && !isOwnUpdate){
-        showCloudUpdateToast(remoteEvent, rows[0].updated_by||remoteCloud.updatedBy||"Drugi roditelj");
-      }
+    renderDiary();
+
+    if(showToast && !isOwnUpdate){
+      showCloudUpdateToast(remoteEvent, rows[0].updated_by||remoteCloud.updatedBy||"Drugi roditelj");
     }
   }catch(error){
     console.warn("Cloud load failed",error);
@@ -3216,14 +3224,24 @@ function startCloudPolling(){
   if(window.__babyDiaryCloudPollingStarted) return;
   window.__babyDiaryCloudPollingStarted=true;
 
+  if(getCloudFamilyId()){
+    loadCloudState(false);
+  }
+
   setInterval(()=>{
     if(getCloudFamilyId()){
       loadCloudState(true);
     }
-  },7000);
+  },3000);
 
   document.addEventListener("visibilitychange",()=>{
     if(!document.hidden && getCloudFamilyId()){
+      loadCloudState(true);
+    }
+  });
+
+  window.addEventListener("focus",()=>{
+    if(getCloudFamilyId()){
       loadCloudState(true);
     }
   });
@@ -3289,6 +3307,7 @@ async function createCloudInvite(){
     })
   });
 
+  startCloudPolling();
   return code;
 }
 
@@ -3330,8 +3349,9 @@ async function connectWithInviteCode(code,mode="replace"){
   if(selectedBabyId) localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
 
   state.updatedAt=rows[0].updated_at||new Date().toISOString();
+  lastRemoteUpdatedAt=state.updatedAt;
   localStorage.setItem(KEY,JSON.stringify(state));
-  localStorage.setItem(CLOUD_LAST_REMOTE_KEY,state.updatedAt);
+  localStorage.setItem(CLOUD_LAST_REMOTE_KEY,lastRemoteUpdatedAt);
 
   currentTab="diary";
   currentDayId=null;
@@ -3572,3 +3592,15 @@ window.addEventListener("DOMContentLoaded", ()=>{
 });
 
 // v2.0 cloud toast own-update and joined-event fix
+
+
+// v20 cloud polling startup guard
+window.addEventListener("DOMContentLoaded", ()=>{
+  setTimeout(()=>{
+    if(getCloudFamilyId()){
+      startCloudPolling();
+    }
+  },800);
+});
+
+// v2.0 cloud polling + remote toast delivery fix
