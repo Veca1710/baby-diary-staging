@@ -57,15 +57,15 @@ function saveState(){
   state.updatedAt=new Date().toISOString();
   localStorage.setItem(KEY,JSON.stringify(state));
 
-  const lastEvent=state.cloud?.lastEvent;
+  const baby=getBaby();
+  const lastEvent=baby?.cloud?.lastEvent;
   const lastEventAt=lastEvent?.at ? new Date(lastEvent.at).getTime() : 0;
   const isFreshSpecificEvent=lastEventAt && (Date.now()-lastEventAt<1200);
 
-  if(!isFreshSpecificEvent){
-    setCloudEvent("data_changed","Dnevnik je ažuriran");
+  if(getSharedBabyId(baby) && !isFreshSpecificEvent){
+    setBabyCloudEvent(baby,"data_changed","Dnevnik je ažuriran");
+    queueCloudSave();
   }
-
-  queueCloudSave();
 }
 function getBaby(){
   return (state.babies||[]).find(b=>b.id===selectedBabyId)||null;
@@ -3014,12 +3014,13 @@ function addOrUpdateAccessPerson(name,deviceId=getDeviceId()){
 }
 
 function renderAccessPeople(){
-  const people=ensureAccessPeople();
+  const baby=getBaby();
+  const people=ensureBabyAccessPeople(baby);
   const currentDeviceId=getDeviceId();
   return `<div class="access-people-block">
     <div class="access-people-head">
       <strong>Osobe sa pristupom (${people.length})</strong>
-      <small>Mogu da prate i upisuju dnevnik.</small>
+      <small>Mogu da prate i upisuju ovaj dnevnik.</small>
     </div>
     <div class="access-people-chips">
       ${people.map(person=>`
@@ -3820,18 +3821,14 @@ window.addEventListener("DOMContentLoaded", ()=>{
 
 
 function leaveSharedDiaryLocally(){
-  const familyId=getCloudFamilyId();
-  if(!familyId) return false;
+  const baby=getBaby();
+  const sharedBabyId=getSharedBabyId(baby);
+  if(!baby || !sharedBabyId) return false;
 
-  localStorage.removeItem(CLOUD_FAMILY_KEY);
-  localStorage.removeItem("babyDiaryFamilyId");
-  localStorage.removeItem(CLOUD_LAST_REMOTE_KEY);
-  lastRemoteUpdatedAt="";
-
-  state.cloud=state.cloud||{};
-  delete state.cloud.familyId;
-  delete state.cloud.lastEvent;
-  state.cloud.sharedDisabledAt=new Date().toISOString();
+  state.babies=state.babies.filter(b=>b.id!==baby.id);
+  selectedBabyId=state.babies[0]?.id||null;
+  if(selectedBabyId) localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+  localStorage.removeItem(getBabyRemoteKey(sharedBabyId));
 
   localStorage.setItem(KEY,JSON.stringify(state));
   toast("Deljeni dnevnik je uklonjen samo sa ovog telefona.");
@@ -3848,7 +3845,7 @@ function confirmLeaveSharedDiary(){
   modal.innerHTML=`
     <div class="confirm-reminder-card">
       <h2>Ukloniti deljeni dnevnik?</h2>
-      <p>Ovaj dnevnik će biti uklonjen samo sa ovog telefona. Kod drugih osoba podaci ostaju sačuvani.</p>
+      <p>Ova beba će biti uklonjena samo sa ovog telefona. Kod drugih osoba podaci ostaju sačuvani.</p>
       <div class="confirm-reminder-actions">
         <button type="button" class="cancel" id="cancelLeaveSharedDiary">Otkaži</button>
         <button type="button" class="danger-action" id="confirmLeaveSharedDiary">Ukloni sa ovog telefona</button>
@@ -3869,7 +3866,7 @@ function confirmLeaveSharedDiary(){
 // v2.0 shared delete protection handler
 document.addEventListener("click", function(event){
   const target=event.target.closest("button, [role='button']");
-  if(!target || !getCloudFamilyId()) return;
+  if(!target || !getSharedBabyId(getBaby())) return;
 
   const text=(target.textContent||"").toLowerCase();
   const id=(target.id||"").toLowerCase();
@@ -3896,3 +3893,369 @@ document.addEventListener("click", function(event){
 }, true);
 
 // v2.0 shared members refresh and local-only shared diary delete fix
+
+
+
+/* Baby Diary v2.0 Baby-level Cloud Sharing */
+const CLOUD_LAST_BABY_REMOTE_PREFIX="babyDiaryLastRemoteBabyUpdatedAt:";
+
+function getSharedBabyId(baby=getBaby()){
+  return baby?.cloud?.sharedBabyId || "";
+}
+
+function setSharedBabyIdForBaby(baby,id){
+  if(!baby || !id) return;
+  baby.cloud=baby.cloud||{};
+  baby.cloud.sharedBabyId=id;
+}
+
+function getBabyRemoteKey(sharedBabyId){
+  return CLOUD_LAST_BABY_REMOTE_PREFIX+sharedBabyId;
+}
+
+function getLastBabyRemoteUpdatedAt(sharedBabyId){
+  return localStorage.getItem(getBabyRemoteKey(sharedBabyId))||"";
+}
+
+function setLastBabyRemoteUpdatedAt(sharedBabyId,value){
+  if(sharedBabyId && value) localStorage.setItem(getBabyRemoteKey(sharedBabyId),value);
+}
+
+function ensureBabyAccessPeople(baby=getBaby()){
+  if(!baby) return [];
+  baby.cloud=baby.cloud||{};
+  baby.cloud.people=Array.isArray(baby.cloud.people)?baby.cloud.people:[];
+  const deviceId=getDeviceId();
+  const name=getParentName();
+  let me=baby.cloud.people.find(p=>p.deviceId===deviceId);
+  if(!me){
+    me={
+      id:"person_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      name,
+      deviceId,
+      role:"editor",
+      joinedAt:new Date().toISOString(),
+      lastSeenAt:new Date().toISOString()
+    };
+    baby.cloud.people.push(me);
+  }else{
+    me.name=name;
+    me.lastSeenAt=new Date().toISOString();
+  }
+  return baby.cloud.people;
+}
+
+function addOrUpdateBabyAccessPerson(baby,name,deviceId=getDeviceId()){
+  if(!baby) return null;
+  baby.cloud=baby.cloud||{};
+  baby.cloud.people=Array.isArray(baby.cloud.people)?baby.cloud.people:[];
+  const finalName=(name||getParentName()||"Osoba").trim()||"Osoba";
+  let person=baby.cloud.people.find(p=>p.deviceId===deviceId);
+  if(!person){
+    person={
+      id:"person_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      name:finalName,
+      deviceId,
+      role:"editor",
+      joinedAt:new Date().toISOString(),
+      lastSeenAt:new Date().toISOString()
+    };
+    baby.cloud.people.push(person);
+  }else{
+    person.name=finalName;
+    person.lastSeenAt=new Date().toISOString();
+  }
+  return person;
+}
+
+function setBabyCloudEvent(baby,type,label){
+  if(!baby) return;
+  baby.cloud=baby.cloud||{};
+  baby.cloud.lastEvent={
+    id:"event_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+    type,
+    label:label||"",
+    by:getParentName(),
+    deviceId:getDeviceId(),
+    at:new Date().toISOString()
+  };
+}
+
+function prepareBabyForCloud(baby=getBaby()){
+  if(!baby) return null;
+  ensureBabyAccessPeople(baby);
+  const clean=JSON.parse(JSON.stringify(baby));
+  clean.updatedAt=new Date().toISOString();
+  clean.cloud={
+    ...(clean.cloud||{}),
+    deviceId:getDeviceId(),
+    updatedBy:getParentName()
+  };
+  return clean;
+}
+
+async function ensureSharedBabyCreated(){
+  const baby=getBaby();
+  if(!baby) throw new Error("Nema aktivne bebe.");
+  let sharedBabyId=getSharedBabyId(baby);
+  if(!sharedBabyId){
+    sharedBabyId="baby_"+Date.now()+"_"+Math.random().toString(36).slice(2,10);
+    setSharedBabyIdForBaby(baby,sharedBabyId);
+  }
+
+  addOrUpdateBabyAccessPerson(baby,getParentName(),getDeviceId());
+  const clean=prepareBabyForCloud(baby);
+  const updatedAt=new Date().toISOString();
+
+  await supabaseFetch("baby_snapshots?on_conflict=shared_baby_id",{
+    method:"POST",
+    headers:{"Prefer":"resolution=merge-duplicates,return=representation"},
+    body:JSON.stringify({
+      shared_baby_id:sharedBabyId,
+      data:clean,
+      updated_at:updatedAt,
+      updated_by:getParentName()
+    })
+  });
+
+  baby.updatedAt=updatedAt;
+  localStorage.setItem(KEY,JSON.stringify(state));
+  setLastBabyRemoteUpdatedAt(sharedBabyId,updatedAt);
+  startCloudPolling();
+  return sharedBabyId;
+}
+
+async function saveCurrentBabyToCloud(){
+  const baby=getBaby();
+  const sharedBabyId=getSharedBabyId(baby);
+  if(!baby || !sharedBabyId) return;
+
+  try{
+    let remotePeople=[];
+    try{
+      const rows=await supabaseFetch(
+        "baby_snapshots?shared_baby_id=eq."+encodeURIComponent(sharedBabyId)+"&select=data&limit=1",
+        {method:"GET"}
+      );
+      remotePeople=Array.isArray(rows)&&rows[0]?.data?.cloud?.people ? rows[0].data.cloud.people : [];
+    }catch(error){}
+
+    baby.cloud=baby.cloud||{};
+    baby.cloud.people=mergeAccessPeople(baby.cloud.people||[],remotePeople);
+    ensureBabyAccessPeople(baby);
+
+    const clean=prepareBabyForCloud(baby);
+    const updatedAt=new Date().toISOString();
+
+    await supabaseFetch("baby_snapshots?on_conflict=shared_baby_id",{
+      method:"POST",
+      headers:{"Prefer":"resolution=merge-duplicates,return=minimal"},
+      body:JSON.stringify({
+        shared_baby_id:sharedBabyId,
+        data:clean,
+        updated_at:updatedAt,
+        updated_by:getParentName()
+      })
+    });
+
+    baby.updatedAt=updatedAt;
+    localStorage.setItem(KEY,JSON.stringify(state));
+    setLastBabyRemoteUpdatedAt(sharedBabyId,updatedAt);
+  }catch(error){
+    console.warn("Baby cloud save failed",error);
+  }
+}
+
+async function loadCurrentBabyFromCloud(showToast=true){
+  const baby=getBaby();
+  const sharedBabyId=getSharedBabyId(baby);
+  if(!baby || !sharedBabyId) return;
+
+  try{
+    const rows=await supabaseFetch(
+      "baby_snapshots?shared_baby_id=eq."+encodeURIComponent(sharedBabyId)+"&select=data,updated_at,updated_by&limit=1",
+      {method:"GET"}
+    );
+    if(!Array.isArray(rows)||!rows.length||!rows[0].data) return;
+
+    const remoteBaby=rows[0].data;
+    const remoteUpdatedAt=rows[0].updated_at||remoteBaby.updatedAt||"";
+    const remoteTime=remoteUpdatedAt?new Date(remoteUpdatedAt).getTime():0;
+    const lastSeen=getLastBabyRemoteUpdatedAt(sharedBabyId);
+    const lastSeenTime=lastSeen?new Date(lastSeen).getTime():0;
+
+    const currentPeople=baby?.cloud?.people||[];
+    const remotePeople=remoteBaby?.cloud?.people||[];
+    const mergedPeople=mergeAccessPeople(currentPeople,remotePeople);
+    const peopleChanged=JSON.stringify(currentPeople)!==JSON.stringify(mergedPeople);
+
+    if(!remoteTime || remoteTime<=lastSeenTime){
+      if(peopleChanged){
+        baby.cloud=baby.cloud||{};
+        baby.cloud.people=mergedPeople;
+        localStorage.setItem(KEY,JSON.stringify(state));
+        renderDiary();
+      }
+      return;
+    }
+
+    const remoteCloud=remoteBaby.cloud||{};
+    const remoteEvent=remoteCloud.lastEvent||null;
+    const isOwnUpdate=remoteCloud.deviceId===getDeviceId() || remoteEvent?.deviceId===getDeviceId();
+
+    const localIndex=(state.babies||[]).findIndex(b=>b.id===baby.id);
+    if(localIndex===-1) return;
+
+    const preservedLocalId=state.babies[localIndex].id;
+    const normalizedRemote=normalizeBaby(remoteBaby);
+    state.babies[localIndex]=normalizedRemote;
+    state.babies[localIndex].id=preservedLocalId;
+    state.babies[localIndex].cloud=state.babies[localIndex].cloud||{};
+    state.babies[localIndex].cloud.sharedBabyId=sharedBabyId;
+    state.babies[localIndex].cloud.people=mergeAccessPeople(currentPeople,state.babies[localIndex].cloud.people||[]);
+    state.babies[localIndex].updatedAt=remoteUpdatedAt;
+
+    localStorage.setItem(KEY,JSON.stringify(state));
+    setLastBabyRemoteUpdatedAt(sharedBabyId,remoteUpdatedAt);
+    renderDiary();
+
+    if(showToast && !isOwnUpdate){
+      showCloudUpdateToast(remoteEvent, rows[0].updated_by||remoteCloud.updatedBy||"Druga osoba");
+    }
+  }catch(error){
+    console.warn("Baby cloud load failed",error);
+  }
+}
+
+async function createCloudInvite(){
+  addOrUpdateBabyAccessPerson(getBaby(),getParentName(),getDeviceId());
+  const sharedBabyId=await ensureSharedBabyCreated();
+  const code=createInviteCode();
+
+  await supabaseFetch("baby_invite_codes",{
+    method:"POST",
+    headers:{"Prefer":"return=representation"},
+    body:JSON.stringify({
+      code,
+      shared_baby_id:sharedBabyId,
+      baby_name:currentBabyNameForInvite(),
+      created_by:getParentName()
+    })
+  });
+
+  await saveCurrentBabyToCloud();
+  startCloudPolling();
+  return code;
+}
+
+async function previewInviteByCode(code){
+  const cleanCode=String(code||"").trim().toUpperCase();
+  if(!cleanCode) throw new Error("Kod nije pronađen.");
+
+  const invites=await supabaseFetch(
+    "baby_invite_codes?code=eq."+encodeURIComponent(cleanCode)+"&select=code,shared_baby_id,baby_name,created_by&limit=1",
+    {method:"GET"}
+  );
+
+  if(!Array.isArray(invites)||!invites.length){
+    throw new Error("Pozivnica nije pronađena.");
+  }
+
+  return invites[0];
+}
+
+async function connectWithInviteCode(code,mode="replace"){
+  const cleanCode=String(code||"").trim().toUpperCase();
+  if(!cleanCode) throw new Error("Unesi kod.");
+
+  const invites=await supabaseFetch(
+    "baby_invite_codes?code=eq."+encodeURIComponent(cleanCode)+"&select=code,shared_baby_id,baby_name,created_by&limit=1",
+    {method:"GET"}
+  );
+  if(!Array.isArray(invites)||!invites.length) throw new Error("Kod nije pronađen.");
+
+  const sharedBabyId=invites[0].shared_baby_id;
+  const rows=await supabaseFetch(
+    "baby_snapshots?shared_baby_id=eq."+encodeURIComponent(sharedBabyId)+"&select=data,updated_at,updated_by&limit=1",
+    {method:"GET"}
+  );
+  if(!Array.isArray(rows)||!rows.length||!rows[0].data) throw new Error("Dnevnik nije pronađen.");
+
+  const remoteBaby=normalizeBaby(rows[0].data);
+  remoteBaby.cloud=remoteBaby.cloud||{};
+  remoteBaby.cloud.sharedBabyId=sharedBabyId;
+
+  if(mode==="replace" && !(state.babies||[]).length){
+    remoteBaby.id=uid("baby");
+    state.babies=[remoteBaby];
+    selectedBabyId=remoteBaby.id;
+  }else{
+    remoteBaby.id=uid("baby");
+    state.babies=Array.isArray(state.babies)?state.babies:[];
+    state.babies.push(remoteBaby);
+    selectedBabyId=remoteBaby.id;
+  }
+
+  addOrUpdateBabyAccessPerson(remoteBaby,getParentName(),getDeviceId());
+  if(selectedBabyId) localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+
+  remoteBaby.updatedAt=rows[0].updated_at||new Date().toISOString();
+  setLastBabyRemoteUpdatedAt(sharedBabyId,remoteBaby.updatedAt);
+  localStorage.setItem(KEY,JSON.stringify(state));
+
+  currentTab="diary";
+  currentDayId=null;
+  openCardId=null;
+
+  renderDiary();
+  startCloudPolling();
+
+  setBabyCloudEvent(remoteBaby,"joined","Osoba se povezala");
+  await saveCurrentBabyToCloud();
+  showTransferInfoModal("Dnevnik je povezan","Sada obe osobe mogu da prate i upisuju ovaj dnevnik.");
+}
+
+function startCloudPolling(){
+  if(window.__babyDiaryCloudPollingStarted) return;
+  window.__babyDiaryCloudPollingStarted=true;
+
+  if(getSharedBabyId(getBaby())) loadCurrentBabyFromCloud(false);
+
+  setInterval(()=>{
+    if(getSharedBabyId(getBaby())) loadCurrentBabyFromCloud(true);
+  },3000);
+
+  document.addEventListener("visibilitychange",()=>{
+    if(!document.hidden && getSharedBabyId(getBaby())) loadCurrentBabyFromCloud(true);
+  });
+
+  window.addEventListener("focus",()=>{
+    if(getSharedBabyId(getBaby())) loadCurrentBabyFromCloud(true);
+  });
+}
+
+async function saveCloudState(){
+  await saveCurrentBabyToCloud();
+}
+
+async function loadCloudState(showToast=true){
+  await loadCurrentBabyFromCloud(showToast);
+}
+
+function getCloudFamilyId(){
+  return getSharedBabyId(getBaby());
+}
+
+function setCloudFamilyId(id){
+  setSharedBabyIdForBaby(getBaby(),id);
+}
+
+
+// v20 baby-level sharing startup guard
+window.addEventListener("DOMContentLoaded", ()=>{
+  setTimeout(()=>{
+    if(getSharedBabyId(getBaby())) startCloudPolling();
+  },800);
+});
+
+// v2.0 baby-level sharing fix
