@@ -3896,6 +3896,32 @@ document.addEventListener("click", function(event){
 
 
 
+
+function normalizeBaby(baby){
+  const fallbackId = typeof uid === "function" ? uid("baby") : ("baby_"+Date.now()+"_"+Math.random().toString(36).slice(2,8));
+  const normalized = {
+    id: baby?.id || fallbackId,
+    name: baby?.name || "Beba",
+    birthDate: baby?.birthDate || "",
+    avatar: baby?.avatar || "",
+    days: Array.isArray(baby?.days) ? baby.days : [],
+    reminders: Array.isArray(baby?.reminders) ? baby.reminders : [],
+    cloud: baby?.cloud && typeof baby.cloud === "object" ? baby.cloud : {},
+    createdAt: baby?.createdAt || new Date().toISOString(),
+    updatedAt: baby?.updatedAt || new Date().toISOString()
+  };
+
+  // Preserve any additional fields from future versions.
+  return {
+    ...(baby || {}),
+    ...normalized,
+    cloud: {
+      ...((baby && baby.cloud) || {}),
+      ...(normalized.cloud || {})
+    }
+  };
+}
+
 /* Baby Diary v2.0 Baby-level Cloud Sharing */
 const CLOUD_LAST_BABY_REMOTE_PREFIX="babyDiaryLastRemoteBabyUpdatedAt:";
 
@@ -4259,3 +4285,5 @@ window.addEventListener("DOMContentLoaded", ()=>{
 });
 
 // v2.0 baby-level sharing fix
+
+// v2.0 normalizeBaby fix for baby-level invite acceptance
