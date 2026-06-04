@@ -4385,3 +4385,114 @@ textarea{
   border-radius:18px;
   font-weight:950;
 }
+
+
+/* v2.0 access people */
+.access-people-block{
+  border:1px solid rgba(222,210,193,.72);
+  background:rgba(255,253,249,.56);
+  border-radius:22px;
+  padding:14px;
+  margin-bottom:12px;
+}
+
+.access-people-head strong{
+  display:block;
+  color:var(--text);
+  font-size:15px;
+  line-height:1.2;
+  font-weight:950;
+}
+
+.access-people-head small{
+  display:block;
+  margin-top:4px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.35;
+  font-weight:800;
+}
+
+.access-people-chips{
+  display:flex;
+  gap:8px;
+  overflow-x:auto;
+  padding:12px 0 2px;
+  -webkit-overflow-scrolling:touch;
+}
+
+.access-person-chip{
+  border:1px solid var(--border);
+  background:var(--card);
+  border-radius:999px;
+  padding:7px 10px 7px 7px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:max-content;
+  color:var(--text);
+  box-shadow:0 8px 18px rgba(46,38,28,.05);
+}
+
+.access-avatar{
+  width:34px;
+  height:34px;
+  border-radius:999px;
+  background:var(--green-soft);
+  color:var(--green-dark);
+  display:grid;
+  place-items:center;
+  font-size:12px;
+  font-weight:950;
+  flex:0 0 34px;
+}
+
+.access-avatar.big{
+  width:72px;
+  height:72px;
+  margin:0 auto 12px;
+  font-size:22px;
+}
+
+.access-person-chip strong{
+  display:block;
+  font-size:13px;
+  line-height:1.1;
+  font-weight:950;
+  text-align:left;
+}
+
+.access-person-chip small{
+  display:block;
+  margin-top:2px;
+  color:var(--muted);
+  font-size:10px;
+  line-height:1.1;
+  font-weight:800;
+  text-align:left;
+}
+
+.access-person-detail{
+  text-align:center;
+}
+
+.access-person-detail h2{
+  margin:0;
+  font-size:22px;
+  line-height:1.15;
+  font-weight:950;
+}
+
+.access-person-detail p{
+  margin:8px 0 4px;
+  color:var(--muted);
+  font-size:14px;
+  line-height:1.35;
+  font-weight:850;
+}
+
+.access-person-detail small{
+  color:var(--muted);
+  font-size:12px;
+  font-weight:800;
+}

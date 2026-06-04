@@ -1326,11 +1326,12 @@ function openSettingsPage(){
       
       <section class="settings-section">
         <h2>Deljenje dnevnika</h2>
+        ${renderAccessPeople()}
         <div class="settings-card">
           <button class="settings-action" id="shareDiary" type="button">
             <span>
-              Pozovi drugog roditelja
-              <small>Omogući drugom roditelju da prati i upisuje dnevnik na svom telefonu</small>
+              Podeli dnevnik sa drugom osobom
+              <small>Omogući drugoj osobi da prati i upisuje dnevnik na svom telefonu</small>
             </span>
             ${icon("right")}
           </button>
@@ -1343,7 +1344,7 @@ function openSettingsPage(){
           <div class="settings-action">
             <span>
               Baby Diary v2.0 Concept
-              <small>Napravljeno sa ❤️ za roditelje</small>
+              <small>Napravljeno sa ❤️ za osobae</small>
             </span>
           </div>
         </div>
@@ -2879,16 +2880,16 @@ Pozivam te da zajedno pratimo dnevnik za ${babyName}.
 1. Otvori ovaj link:
 ${link}
 
-2. Ako nemaš aplikaciju, otvoriće se Baby Diary u browseru.
-3. Kada se otvori pozivnica, klikni "Poveži dnevnik".
-4. Posle toga možeš da dodaš aplikaciju na Home Screen.
+2. Ako nemaš aplikaciju, Baby Diary će se otvoriti u browseru.
+Kada se otvori pozivnica, klikni "Poveži dnevnik".
+Posle toga možeš da dodaš aplikaciju na Home Screen.
 
 Rezervni kod za povezivanje: ${code}`;
 }
 
 async function shareInvite(){
   try{
-    const namePrompt=prompt("Kako želiš da se tvoje ime prikazuje drugom roditelju?", getParentName());
+    const namePrompt=prompt("Kako želiš da se tvoje ime prikazuje drugoj osobi?", getParentName());
     if(namePrompt) setParentName(namePrompt);
 
     const code=await createCloudInvite();
@@ -2920,6 +2921,110 @@ async function shareInvite(){
   }
 }
 
+
+function personInitials(name){
+  const clean=String(name||"Osoba").trim();
+  const parts=clean.split(/\s+/).filter(Boolean);
+  if(!parts.length) return "O";
+  if(parts.length===1) return parts[0].slice(0,2).toUpperCase();
+  return (parts[0][0]+parts[1][0]).toUpperCase();
+}
+
+function ensureAccessPeople(){
+  state.cloud=state.cloud||{};
+  state.cloud.people=Array.isArray(state.cloud.people)?state.cloud.people:[];
+  const deviceId=getDeviceId();
+  const name=getParentName();
+  let me=state.cloud.people.find(p=>p.deviceId===deviceId);
+  if(!me){
+    me={
+      id:"person_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      name,
+      deviceId,
+      role:"editor",
+      joinedAt:new Date().toISOString(),
+      lastSeenAt:new Date().toISOString()
+    };
+    state.cloud.people.push(me);
+  }else{
+    me.name=name;
+    me.lastSeenAt=new Date().toISOString();
+  }
+  return state.cloud.people;
+}
+
+function addOrUpdateAccessPerson(name,deviceId=getDeviceId()){
+  state.cloud=state.cloud||{};
+  state.cloud.people=Array.isArray(state.cloud.people)?state.cloud.people:[];
+  const finalName=(name||getParentName()||"Osoba").trim()||"Osoba";
+  let person=state.cloud.people.find(p=>p.deviceId===deviceId);
+  if(!person){
+    person={
+      id:"person_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      name:finalName,
+      deviceId,
+      role:"editor",
+      joinedAt:new Date().toISOString(),
+      lastSeenAt:new Date().toISOString()
+    };
+    state.cloud.people.push(person);
+  }else{
+    person.name=finalName;
+    person.lastSeenAt=new Date().toISOString();
+  }
+  return person;
+}
+
+function renderAccessPeople(){
+  const people=ensureAccessPeople();
+  const currentDeviceId=getDeviceId();
+  return `<div class="access-people-block">
+    <div class="access-people-head">
+      <strong>Osobe sa pristupom (${people.length})</strong>
+      <small>Mogu da prate i upisuju dnevnik.</small>
+    </div>
+    <div class="access-people-chips">
+      ${people.map(person=>`
+        <button class="access-person-chip" type="button" data-person-id="${person.id}">
+          <span class="access-avatar">${escapeHtml(personInitials(person.name))}</span>
+          <span>
+            <strong>${escapeHtml(person.name||"Osoba")}${person.deviceId===currentDeviceId?" (Ti)":""}</strong>
+            <small>Može da upisuje</small>
+          </span>
+        </button>
+      `).join("")}
+    </div>
+  </div>`;
+}
+
+function openAccessPersonInfo(personId){
+  const people=ensureAccessPeople();
+  const person=people.find(p=>p.id===personId);
+  if(!person) return;
+  document.getElementById("accessPersonInfo")?.remove();
+
+  const isMe=person.deviceId===getDeviceId();
+  const modal=document.createElement("div");
+  modal.id="accessPersonInfo";
+  modal.className="confirm-reminder-bg open";
+  modal.innerHTML=`
+    <div class="confirm-reminder-card">
+      <div class="access-person-detail">
+        <span class="access-avatar big">${escapeHtml(personInitials(person.name))}</span>
+        <h2>${escapeHtml(person.name||"Osoba")}${isMe?" (Ti)":""}</h2>
+        <p>Može da prati i upisuje dnevnik.</p>
+        <small>Povezan/a od: ${person.joinedAt ? fmt(person.joinedAt.slice(0,10)) : "nepoznato"}</small>
+      </div>
+      <div class="confirm-reminder-actions single">
+        <button type="button" class="save" id="closeAccessPersonInfo">U redu</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  document.getElementById("closeAccessPersonInfo").onclick=()=>modal.remove();
+  modal.addEventListener("click",(event)=>{ if(event.target===modal) modal.remove(); });
+}
+
 function openShareDiarySheet(){
   document.getElementById("shareDiarySheet")?.remove();
 
@@ -2935,7 +3040,7 @@ function openShareDiarySheet(){
       <div class="modal-head">
         <div>
           <h2>Deljenje dnevnika</h2>
-          <p>Pozovi drugog roditelja da zajedno pratite i upisujete dnevnik.</p>
+          <p>Podeli dnevnik sa drugom osobom kako biste zajedno pratili i upisujete dnevnik.</p>
         </div>
         <button class="close" id="closeShareDiarySheet" type="button">×</button>
       </div>
@@ -2943,7 +3048,7 @@ function openShareDiarySheet(){
       <div class="share-hero">
         <div class="share-illustration">👶<span>🔗</span></div>
         <strong>Poziv za ${escapeHtml(babyName)}</strong>
-        <small>Drugi roditelj će dobiti link i uputstvo kako da otvori aplikaciju.</small>
+        <small>Druga osoba će dobiti link i uputstvo kako da otvori aplikaciju.</small>
       </div>
 
       <button class="primary share-primary" id="sendInviteButton" type="button">Pošalji pozivnicu</button>
@@ -2993,7 +3098,7 @@ function showInviteTextModal(text){
   modal.innerHTML=`
     <div class="confirm-reminder-card">
       <h2>Kopiraj pozivnicu</h2>
-      <p>Pošalji ovu poruku drugom roditelju.</p>
+      <p>Pošalji ovu poruku drugoj osobi.</p>
       <textarea class="input invite-textarea" readonly>${escapeHtml(text)}</textarea>
       <div class="confirm-reminder-actions single">
         <button type="button" class="save" id="closeInviteText">U redu</button>
@@ -3038,11 +3143,14 @@ function getDeviceId(){
 }
 
 function getParentName(){
-  return localStorage.getItem(CLOUD_PARENT_KEY)||"Roditelj";
+  return localStorage.getItem(CLOUD_PARENT_KEY)||"Osoba";
 }
 
 function setParentName(name){
-  localStorage.setItem(CLOUD_PARENT_KEY,(name||"Roditelj").trim()||"Roditelj");
+  localStorage.setItem(CLOUD_PARENT_KEY,(name||"Osoba").trim()||"Osoba");
+  if(typeof state==="object" && state){
+    addOrUpdateAccessPerson((name||"Osoba").trim()||"Osoba",getDeviceId());
+  }
 }
 
 function getCloudFamilyId(){
@@ -3092,6 +3200,7 @@ async function supabaseFetch(path,options={}){
 }
 
 function prepareStateForCloud(){
+  ensureAccessPeople();
   const clean=JSON.parse(JSON.stringify(state));
   clean.updatedAt=new Date().toISOString();
   clean.cloud={
@@ -3107,6 +3216,7 @@ async function ensureCloudFamilyCreated(){
   if(!familyId){
     familyId="family_"+Date.now()+"_"+Math.random().toString(36).slice(2,10);
     setCloudFamilyId(familyId);
+  addOrUpdateAccessPerson(getParentName(),getDeviceId());
   }
 
   const clean=prepareStateForCloud();
@@ -3213,7 +3323,7 @@ async function loadCloudState(showToast=true){
     renderDiary();
 
     if(showToast && !isOwnUpdate){
-      showCloudUpdateToast(remoteEvent, rows[0].updated_by||remoteCloud.updatedBy||"Drugi roditelj");
+      showCloudUpdateToast(remoteEvent, rows[0].updated_by||remoteCloud.updatedBy||"Druga osoba");
     }
   }catch(error){
     console.warn("Cloud load failed",error);
@@ -3251,13 +3361,13 @@ function showCloudUpdateToast(eventOrName,parentNameFallback){
   document.getElementById("cloudUpdateToast")?.remove();
 
   const event=typeof eventOrName==="object" && eventOrName ? eventOrName : null;
-  const parentName=event?.by || parentNameFallback || eventOrName || "Drugi roditelj";
+  const parentName=event?.by || parentNameFallback || eventOrName || "Druga osoba";
 
   let title="Nova izmena u dnevniku";
   let message=`${parentName} je ažurirao/la dnevnik.`;
 
   if(event?.type==="joined"){
-    title="Roditelj je povezan";
+    title="Osoba je povezana";
     message=`${parentName} se povezao/la sa dnevnikom.`;
   }
 
@@ -3293,6 +3403,7 @@ function createInviteCode(){
 }
 
 async function createCloudInvite(){
+  addOrUpdateAccessPerson(getParentName(),getDeviceId());
   const familyId=await ensureCloudFamilyCreated();
   const code=createInviteCode();
 
@@ -3360,11 +3471,11 @@ async function connectWithInviteCode(code,mode="replace"){
   renderDiary();
   startCloudPolling();
 
-  setCloudEvent("joined","Roditelj se povezao");
+  setCloudEvent("joined","Osoba se povezala");
   saveState();
   await saveCloudState();
 
-  showTransferInfoModal("Dnevnik je povezan","Sada oba roditelja mogu da prate i upisuju isti dnevnik.");
+  showTransferInfoModal("Dnevnik je povezan","Sada obe osobe mogu da prate i upisuju isti dnevnik.");
 }
 
 
@@ -3379,14 +3490,14 @@ function openConnectCodeModal(){
   modal.innerHTML=`
     <div class="confirm-reminder-card">
       <h2>Poveži dnevnik</h2>
-      <p>Unesi kod koji ti je poslao drugi roditelj.</p>
+      <p>Unesi kod koji ti je poslao druga osoba.</p>
       <input class="input" id="connectCodeInput" placeholder="npr. TIMO-4829" style="margin-top:12px;text-transform:uppercase">
 
       ${hasExisting ? `
         <div class="import-options">
           <p>Na ovom telefonu već postoje podaci.</p>
           <label><input type="radio" name="connectMode" value="replace" checked> Zameni moje podatke deljenim dnevnikom</label>
-          <small>Koristi ako želiš isti dnevnik kao drugi roditelj.</small>
+          <small>Koristi ako želiš isti dnevnik kao druga osoba.</small>
           <label><input type="radio" name="connectMode" value="append"> Dodaj deljeni dnevnik kao novu bebu</label>
           <small>Najbezbednije ako nisi siguran/na.</small>
         </div>
@@ -3406,7 +3517,7 @@ function openConnectCodeModal(){
 
   document.getElementById("confirmConnectCode").onclick=async()=>{
     const code=document.getElementById("connectCodeInput").value;
-    const parentName=prompt("Kako želiš da se tvoje ime prikazuje drugom roditelju?", getParentName());
+    const parentName=prompt("Kako želiš da se tvoje ime prikazuje drugoj osobi?", getParentName());
     if(parentName) setParentName(parentName);
 
     const mode=hasExisting ? (document.querySelector('input[name="connectMode"]:checked')?.value||"replace") : "replace";
@@ -3481,7 +3592,7 @@ function openJoinInviteScreen(invite){
         <h1>Poziv za Baby Diary</h1>
         <p>Pozvani ste da se povežete sa dnevnikom za:</p>
         <strong>${escapeHtml(invite.baby_name||"bebu")}</strong>
-        <small>Poziv je poslao/la ${escapeHtml(invite.created_by||"drugi roditelj")}.</small>
+        <small>Poziv je poslao/la ${escapeHtml(invite.created_by||"druga osoba")}.</small>
 
         <div class="join-actions">
           <button class="primary" id="acceptJoinInvite" type="button">Poveži dnevnik</button>
@@ -3571,7 +3682,7 @@ function openJoinModeModal(code){
 }
 
 async function askParentNameAndConnect(code,mode){
-  const parentName=prompt("Kako želiš da se tvoje ime prikazuje drugom roditelju?", getParentName());
+  const parentName=prompt("Kako želiš da se tvoje ime prikazuje drugoj osobi?", getParentName());
   if(parentName) setParentName(parentName);
 
   try{
@@ -3604,3 +3715,19 @@ window.addEventListener("DOMContentLoaded", ()=>{
 });
 
 // v2.0 cloud polling + remote toast delivery fix
+
+// v2.0 share naming neutral person fix
+
+
+// v20 access person delegated handler
+document.addEventListener("click", function(event){
+  const chip=event.target.closest(".access-person-chip");
+  if(!chip) return;
+  event.preventDefault();
+  event.stopPropagation();
+  openAccessPersonInfo(chip.dataset.personId);
+}, true);
+
+// v2.0 access people chips fix
+
+// v2.0 full neutral naming fix: osoba instead of roditelj

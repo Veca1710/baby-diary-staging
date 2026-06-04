@@ -3,7 +3,7 @@ Baby Diary v2.0 Cloud Sharing Test Build
 WHAT IS INCLUDED
 - Supabase cloud snapshot sync
 - Invite code table
-- "Pozovi drugog roditelja"
+- "Podeli dnevnik sa drugom osobom"
 - "Imam kod"
 - Shared family diary connection
 - Toast when cloud data changes
