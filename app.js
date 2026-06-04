@@ -2930,6 +2930,40 @@ function personInitials(name){
   return (parts[0][0]+parts[1][0]).toUpperCase();
 }
 
+function getAccessPeople(){
+  state.cloud=state.cloud||{};
+  state.cloud.people=Array.isArray(state.cloud.people)?state.cloud.people:[];
+  return state.cloud.people;
+}
+
+function mergeAccessPeople(localPeople=[],remotePeople=[]){
+  const map=new Map();
+
+  [...(remotePeople||[]), ...(localPeople||[])].forEach(person=>{
+    if(!person) return;
+    const key=person.deviceId || person.id || person.name;
+    if(!key) return;
+
+    const existing=map.get(key);
+    if(!existing){
+      map.set(key,{...person});
+      return;
+    }
+
+    const existingSeen=existing.lastSeenAt ? new Date(existing.lastSeenAt).getTime() : 0;
+    const personSeen=person.lastSeenAt ? new Date(person.lastSeenAt).getTime() : 0;
+
+    map.set(key,{
+      ...existing,
+      ...person,
+      joinedAt: existing.joinedAt || person.joinedAt || new Date().toISOString(),
+      lastSeenAt: personSeen>=existingSeen ? (person.lastSeenAt||existing.lastSeenAt) : (existing.lastSeenAt||person.lastSeenAt)
+    });
+  });
+
+  return Array.from(map.values());
+}
+
 function ensureAccessPeople(){
   state.cloud=state.cloud||{};
   state.cloud.people=Array.isArray(state.cloud.people)?state.cloud.people:[];
@@ -3261,6 +3295,19 @@ async function saveCloudState(){
   if(!familyId) return;
 
   try{
+    let remotePeople=[];
+    try{
+      const rows=await supabaseFetch(
+        "app_snapshots?family_id=eq."+encodeURIComponent(familyId)+"&select=data&limit=1",
+        {method:"GET"}
+      );
+      remotePeople=Array.isArray(rows)&&rows[0]?.data?.cloud?.people ? rows[0].data.cloud.people : [];
+    }catch(error){}
+
+    state.cloud=state.cloud||{};
+    state.cloud.people=mergeAccessPeople(state.cloud.people||[],remotePeople);
+    ensureAccessPeople();
+
     const clean=prepareStateForCloud();
     const updatedAt=new Date().toISOString();
 
@@ -3309,11 +3356,14 @@ async function loadCloudState(showToast=true){
 
     if(!remoteTime || remoteTime<=lastSeenTime) return;
 
+    const currentPeople=state?.cloud?.people||[];
     const remoteCloud=remoteData.cloud||{};
     const remoteEvent=remoteCloud.lastEvent||null;
     const isOwnUpdate=remoteCloud.deviceId===getDeviceId() || remoteEvent?.deviceId===getDeviceId();
 
     state=normalizeMultiBaby(remoteData);
+    state.cloud=state.cloud||{};
+    state.cloud.people=mergeAccessPeople(currentPeople, state.cloud.people||[]);
     state.updatedAt=remoteUpdatedAt;
 
     localStorage.setItem(KEY,JSON.stringify(state));
@@ -3361,14 +3411,14 @@ function showCloudUpdateToast(eventOrName,parentNameFallback){
   document.getElementById("cloudUpdateToast")?.remove();
 
   const event=typeof eventOrName==="object" && eventOrName ? eventOrName : null;
-  const parentName=event?.by || parentNameFallback || eventOrName || "Druga osoba";
+  const personName=event?.by || parentNameFallback || eventOrName || "Druga osoba";
 
   let title="Nova izmena u dnevniku";
-  let message=`${parentName} je ažurirao/la dnevnik.`;
+  let message=`${personName} je ažurirao/la dnevnik.`;
 
   if(event?.type==="joined"){
     title="Osoba je povezana";
-    message=`${parentName} se povezao/la sa dnevnikom.`;
+    message=`${personName} se povezao/la sa dnevnikom.`;
   }
 
   const toastEl=document.createElement("div");
@@ -3418,6 +3468,7 @@ async function createCloudInvite(){
     })
   });
 
+  await saveCloudState();
   startCloudPolling();
   return code;
 }
@@ -3445,18 +3496,25 @@ async function connectWithInviteCode(code,mode="replace"){
     throw new Error("Dnevnik nije pronađen.");
   }
 
+  const previousPeople=state?.cloud?.people||[];
   const remoteState=normalizeMultiBaby(rows[0].data);
 
   if(mode==="append" && (state.babies||[]).length){
     const importedBabies=(remoteState.babies||[]).map(cloneImportedBaby);
     state.babies.push(...importedBabies);
     selectedBabyId=importedBabies[0]?.id||selectedBabyId;
+    state.cloud=state.cloud||{};
+    state.cloud.people=mergeAccessPeople(previousPeople, remoteState.cloud?.people||[]);
   }else{
     state=remoteState;
     selectedBabyId=state.babies[0]?.id||null;
+    state.cloud=state.cloud||{};
+    state.cloud.people=mergeAccessPeople(previousPeople, state.cloud.people||[]);
   }
 
   setCloudFamilyId(familyId);
+  addOrUpdateAccessPerson(getParentName(),getDeviceId());
+
   if(selectedBabyId) localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
 
   state.updatedAt=rows[0].updated_at||new Date().toISOString();
@@ -3472,7 +3530,6 @@ async function connectWithInviteCode(code,mode="replace"){
   startCloudPolling();
 
   setCloudEvent("joined","Osoba se povezala");
-  saveState();
   await saveCloudState();
 
   showTransferInfoModal("Dnevnik je povezan","Sada obe osobe mogu da prate i upisuju isti dnevnik.");
@@ -3731,3 +3788,15 @@ document.addEventListener("click", function(event){
 // v2.0 access people chips fix
 
 // v2.0 full neutral naming fix: osoba instead of roditelj
+
+
+// v20 cloud members startup guard
+window.addEventListener("DOMContentLoaded", ()=>{
+  setTimeout(()=>{
+    if(getCloudFamilyId()){
+      startCloudPolling();
+    }
+  },800);
+});
+
+// v2.0 members merge + joined toast fix
