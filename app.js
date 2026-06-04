@@ -2884,7 +2884,7 @@ ${link}
 Kada se otvori pozivnica, klikni "Poveži dnevnik".
 Posle toga možeš da dodaš aplikaciju na Home Screen.
 
-Rezervni kod za povezivanje: ${code}`;
+Rezervni kod: ${code}`;
 }
 
 async function shareInvite(){
@@ -2956,6 +2956,10 @@ function mergeAccessPeople(localPeople=[],remotePeople=[]){
     map.set(key,{
       ...existing,
       ...person,
+      id: existing.id || person.id,
+      name: person.name || existing.name || "Osoba",
+      deviceId: person.deviceId || existing.deviceId,
+      role: person.role || existing.role || "editor",
       joinedAt: existing.joinedAt || person.joinedAt || new Date().toISOString(),
       lastSeenAt: personSeen>=existingSeen ? (person.lastSeenAt||existing.lastSeenAt) : (existing.lastSeenAt||person.lastSeenAt)
     });
@@ -3088,7 +3092,6 @@ function openShareDiarySheet(){
       <button class="primary share-primary" id="sendInviteButton" type="button">Pošalji pozivnicu</button>
 
       <button class="share-secondary" id="showInviteCode" type="button">Prikaži kod</button>
-      <button class="share-secondary" id="connectInviteCode" type="button">Imam kod</button>
 
       <div class="invite-code-box hidden" id="inviteCodeBox">
         <span>Kod za povezivanje</span>
@@ -3111,7 +3114,6 @@ function openShareDiarySheet(){
   document.getElementById("showInviteCode").onclick=()=>{
     document.getElementById("inviteCodeBox").classList.toggle("hidden");
   };
-  document.getElementById("connectInviteCode") && (document.getElementById("connectInviteCode").onclick=openConnectCodeModal);
   document.getElementById("copyInviteMessage").onclick=async()=>{
     const text=inviteMessage();
     try{
@@ -3354,9 +3356,21 @@ async function loadCloudState(showToast=true){
     const remoteTime=remoteUpdatedAt?new Date(remoteUpdatedAt).getTime():0;
     const lastSeenTime=lastRemoteUpdatedAt?new Date(lastRemoteUpdatedAt).getTime():0;
 
-    if(!remoteTime || remoteTime<=lastSeenTime) return;
-
     const currentPeople=state?.cloud?.people||[];
+    const remotePeople=remoteData?.cloud?.people||[];
+    const mergedPeople=mergeAccessPeople(currentPeople,remotePeople);
+    const peopleChanged=JSON.stringify(currentPeople)!==JSON.stringify(mergedPeople);
+
+    if(!remoteTime || remoteTime<=lastSeenTime){
+      if(peopleChanged){
+        state.cloud=state.cloud||{};
+        state.cloud.people=mergedPeople;
+        localStorage.setItem(KEY,JSON.stringify(state));
+        renderDiary();
+      }
+      return;
+    }
+
     const remoteCloud=remoteData.cloud||{};
     const remoteEvent=remoteCloud.lastEvent||null;
     const isOwnUpdate=remoteCloud.deviceId===getDeviceId() || remoteEvent?.deviceId===getDeviceId();
@@ -3800,3 +3814,85 @@ window.addEventListener("DOMContentLoaded", ()=>{
 });
 
 // v2.0 members merge + joined toast fix
+
+// v2.0 simplified invite flow: removed visible manual code entry
+
+
+
+function leaveSharedDiaryLocally(){
+  const familyId=getCloudFamilyId();
+  if(!familyId) return false;
+
+  localStorage.removeItem(CLOUD_FAMILY_KEY);
+  localStorage.removeItem("babyDiaryFamilyId");
+  localStorage.removeItem(CLOUD_LAST_REMOTE_KEY);
+  lastRemoteUpdatedAt="";
+
+  state.cloud=state.cloud||{};
+  delete state.cloud.familyId;
+  delete state.cloud.lastEvent;
+  state.cloud.sharedDisabledAt=new Date().toISOString();
+
+  localStorage.setItem(KEY,JSON.stringify(state));
+  toast("Deljeni dnevnik je uklonjen samo sa ovog telefona.");
+  renderDiary();
+  return true;
+}
+
+function confirmLeaveSharedDiary(){
+  document.getElementById("leaveSharedDiaryConfirm")?.remove();
+
+  const modal=document.createElement("div");
+  modal.id="leaveSharedDiaryConfirm";
+  modal.className="confirm-reminder-bg open";
+  modal.innerHTML=`
+    <div class="confirm-reminder-card">
+      <h2>Ukloniti deljeni dnevnik?</h2>
+      <p>Ovaj dnevnik će biti uklonjen samo sa ovog telefona. Kod drugih osoba podaci ostaju sačuvani.</p>
+      <div class="confirm-reminder-actions">
+        <button type="button" class="cancel" id="cancelLeaveSharedDiary">Otkaži</button>
+        <button type="button" class="danger-action" id="confirmLeaveSharedDiary">Ukloni sa ovog telefona</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  document.getElementById("cancelLeaveSharedDiary").onclick=()=>modal.remove();
+  document.getElementById("confirmLeaveSharedDiary").onclick=()=>{
+    modal.remove();
+    leaveSharedDiaryLocally();
+  };
+  modal.addEventListener("click",(event)=>{ if(event.target===modal) modal.remove(); });
+}
+
+
+// v2.0 shared delete protection handler
+document.addEventListener("click", function(event){
+  const target=event.target.closest("button, [role='button']");
+  if(!target || !getCloudFamilyId()) return;
+
+  const text=(target.textContent||"").toLowerCase();
+  const id=(target.id||"").toLowerCase();
+  const cls=(target.className||"").toString().toLowerCase();
+  const dataAction=(target.dataset?.action||target.dataset?.babyAction||"").toLowerCase();
+
+  const looksLikeBabyDelete=
+    text.includes("obriši bebu") ||
+    text.includes("obrisi bebu") ||
+    text.includes("ukloni bebu") ||
+    id.includes("deletebaby") ||
+    id.includes("removebaby") ||
+    cls.includes("delete-baby") ||
+    cls.includes("remove-baby") ||
+    dataAction.includes("delete-baby") ||
+    dataAction.includes("remove-baby");
+
+  if(!looksLikeBabyDelete) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  confirmLeaveSharedDiary();
+}, true);
+
+// v2.0 shared members refresh and local-only shared diary delete fix
