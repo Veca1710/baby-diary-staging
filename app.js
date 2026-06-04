@@ -4287,3 +4287,503 @@ window.addEventListener("DOMContentLoaded", ()=>{
 // v2.0 baby-level sharing fix
 
 // v2.0 normalizeBaby fix for baby-level invite acceptance
+
+/* v2.0 FINAL PATCH: baby-level members sync + local-only shared baby removal */
+
+function babyEventSeenKey(sharedBabyId){
+  return "babyDiarySeenCloudEvent:"+sharedBabyId;
+}
+
+function getSeenBabyEvent(sharedBabyId){
+  return localStorage.getItem(babyEventSeenKey(sharedBabyId))||"";
+}
+
+function setSeenBabyEvent(sharedBabyId,eventId){
+  if(sharedBabyId && eventId) localStorage.setItem(babyEventSeenKey(sharedBabyId),eventId);
+}
+
+function getAllSharedBabies(){
+  return (state.babies||[]).filter(b=>b?.cloud?.sharedBabyId);
+}
+
+function getActiveSharedBaby(){
+  const baby=getBaby();
+  return baby?.cloud?.sharedBabyId ? baby : null;
+}
+
+function ensureBabyAccessPeopleFinal(baby=getBaby()){
+  if(!baby) return [];
+  baby.cloud=baby.cloud||{};
+  baby.cloud.people=Array.isArray(baby.cloud.people)?baby.cloud.people:[];
+  const deviceId=getDeviceId();
+  const name=getParentName();
+  let me=baby.cloud.people.find(p=>p.deviceId===deviceId);
+  if(!me){
+    me={
+      id:"person_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      name,
+      deviceId,
+      role:"editor",
+      joinedAt:new Date().toISOString(),
+      lastSeenAt:new Date().toISOString()
+    };
+    baby.cloud.people.push(me);
+  }else{
+    me.name=name;
+    me.lastSeenAt=new Date().toISOString();
+  }
+  return baby.cloud.people;
+}
+
+function mergeAccessPeopleFinal(localPeople=[],remotePeople=[]){
+  const map=new Map();
+  [...(localPeople||[]), ...(remotePeople||[])].forEach(person=>{
+    if(!person) return;
+    const key=person.deviceId || person.id || person.name;
+    if(!key) return;
+    const existing=map.get(key)||{};
+    const existingSeen=existing.lastSeenAt ? new Date(existing.lastSeenAt).getTime() : 0;
+    const personSeen=person.lastSeenAt ? new Date(person.lastSeenAt).getTime() : 0;
+    map.set(key,{
+      ...existing,
+      ...person,
+      id: existing.id || person.id || ("person_"+Math.random().toString(36).slice(2,8)),
+      name: person.name || existing.name || "Osoba",
+      deviceId: person.deviceId || existing.deviceId,
+      role: person.role || existing.role || "editor",
+      joinedAt: existing.joinedAt || person.joinedAt || new Date().toISOString(),
+      lastSeenAt: personSeen>=existingSeen ? (person.lastSeenAt||existing.lastSeenAt||new Date().toISOString()) : (existing.lastSeenAt||person.lastSeenAt||new Date().toISOString())
+    });
+  });
+  return Array.from(map.values());
+}
+
+function getSharedBabyId(baby=getBaby()){
+  return baby?.cloud?.sharedBabyId || "";
+}
+
+function setSharedBabyIdForBaby(baby,id){
+  if(!baby || !id) return;
+  baby.cloud=baby.cloud||{};
+  baby.cloud.sharedBabyId=id;
+}
+
+function getBabyRemoteKey(sharedBabyId){
+  return "babyDiaryLastRemoteBabyUpdatedAt:"+sharedBabyId;
+}
+
+function getLastBabyRemoteUpdatedAt(sharedBabyId){
+  return localStorage.getItem(getBabyRemoteKey(sharedBabyId))||"";
+}
+
+function setLastBabyRemoteUpdatedAt(sharedBabyId,value){
+  if(sharedBabyId && value) localStorage.setItem(getBabyRemoteKey(sharedBabyId),value);
+}
+
+function setBabyCloudEvent(baby,type,label){
+  if(!baby) return;
+  baby.cloud=baby.cloud||{};
+  baby.cloud.lastEvent={
+    id:"event_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+    type,
+    label:label||"",
+    by:getParentName(),
+    deviceId:getDeviceId(),
+    at:new Date().toISOString()
+  };
+}
+
+function prepareBabyForCloudFinal(baby=getBaby()){
+  if(!baby) return null;
+  ensureBabyAccessPeopleFinal(baby);
+  const clean=JSON.parse(JSON.stringify(baby));
+  clean.updatedAt=new Date().toISOString();
+  clean.cloud={
+    ...(clean.cloud||{}),
+    deviceId:getDeviceId(),
+    updatedBy:getParentName()
+  };
+  return clean;
+}
+
+async function saveCurrentBabyToCloud(){
+  const baby=getBaby();
+  const sharedBabyId=getSharedBabyId(baby);
+  if(!baby || !sharedBabyId) return;
+
+  try{
+    let remotePeople=[];
+    try{
+      const rows=await supabaseFetch(
+        "baby_snapshots?shared_baby_id=eq."+encodeURIComponent(sharedBabyId)+"&select=data&limit=1",
+        {method:"GET"}
+      );
+      remotePeople=Array.isArray(rows)&&rows[0]?.data?.cloud?.people ? rows[0].data.cloud.people : [];
+    }catch(error){}
+
+    baby.cloud=baby.cloud||{};
+    baby.cloud.people=mergeAccessPeopleFinal(baby.cloud.people||[],remotePeople);
+    ensureBabyAccessPeopleFinal(baby);
+
+    const clean=prepareBabyForCloudFinal(baby);
+    const updatedAt=new Date().toISOString();
+
+    await supabaseFetch("baby_snapshots?on_conflict=shared_baby_id",{
+      method:"POST",
+      headers:{"Prefer":"resolution=merge-duplicates,return=minimal"},
+      body:JSON.stringify({
+        shared_baby_id:sharedBabyId,
+        data:clean,
+        updated_at:updatedAt,
+        updated_by:getParentName()
+      })
+    });
+
+    baby.updatedAt=updatedAt;
+    localStorage.setItem(KEY,JSON.stringify(state));
+    setLastBabyRemoteUpdatedAt(sharedBabyId,updatedAt);
+  }catch(error){
+    console.warn("Baby cloud save failed",error);
+  }
+}
+
+async function loadBabyFromCloudById(localBaby,showToast=true){
+  const sharedBabyId=getSharedBabyId(localBaby);
+  if(!localBaby || !sharedBabyId) return;
+
+  try{
+    const rows=await supabaseFetch(
+      "baby_snapshots?shared_baby_id=eq."+encodeURIComponent(sharedBabyId)+"&select=data,updated_at,updated_by&limit=1",
+      {method:"GET"}
+    );
+
+    if(!Array.isArray(rows)||!rows.length||!rows[0].data) return;
+
+    const remoteBaby=rows[0].data;
+    const remoteUpdatedAt=rows[0].updated_at||remoteBaby.updatedAt||"";
+    const remoteCloud=remoteBaby.cloud||{};
+    const remoteEvent=remoteCloud.lastEvent||null;
+    const localIndex=(state.babies||[]).findIndex(b=>b.id===localBaby.id);
+    if(localIndex===-1) return;
+
+    const currentLocal=state.babies[localIndex];
+    const currentPeople=currentLocal?.cloud?.people||[];
+    const remotePeople=remoteBaby?.cloud?.people||[];
+    const mergedPeople=mergeAccessPeopleFinal(currentPeople,remotePeople);
+
+    const lastSeen=getLastBabyRemoteUpdatedAt(sharedBabyId);
+    const remoteTime=remoteUpdatedAt?new Date(remoteUpdatedAt).getTime():0;
+    const lastSeenTime=lastSeen?new Date(lastSeen).getTime():0;
+
+    const remoteChanged=remoteTime && remoteTime>lastSeenTime;
+    const peopleChanged=JSON.stringify(currentPeople)!==JSON.stringify(mergedPeople);
+
+    if(remoteChanged){
+      const preservedLocalId=currentLocal.id;
+      const normalizedRemote=typeof normalizeBaby==="function" ? normalizeBaby(remoteBaby) : {...remoteBaby};
+      state.babies[localIndex]=normalizedRemote;
+      state.babies[localIndex].id=preservedLocalId;
+      state.babies[localIndex].cloud=state.babies[localIndex].cloud||{};
+      state.babies[localIndex].cloud.sharedBabyId=sharedBabyId;
+      state.babies[localIndex].cloud.people=mergedPeople;
+      state.babies[localIndex].updatedAt=remoteUpdatedAt;
+      setLastBabyRemoteUpdatedAt(sharedBabyId,remoteUpdatedAt);
+    }else if(peopleChanged){
+      currentLocal.cloud=currentLocal.cloud||{};
+      currentLocal.cloud.people=mergedPeople;
+    }
+
+    localStorage.setItem(KEY,JSON.stringify(state));
+    if(remoteChanged || peopleChanged) renderDiary();
+
+    const isOwnUpdate=remoteCloud.deviceId===getDeviceId() || remoteEvent?.deviceId===getDeviceId();
+    const lastSeenEvent=getSeenBabyEvent(sharedBabyId);
+    const eventIsNew=remoteEvent?.id && remoteEvent.id!==lastSeenEvent;
+
+    if(showToast && remoteChanged && !isOwnUpdate && eventIsNew){
+      setSeenBabyEvent(sharedBabyId,remoteEvent.id);
+      showCloudUpdateToast(remoteEvent, rows[0].updated_by||remoteCloud.updatedBy||"Druga osoba");
+    }
+  }catch(error){
+    console.warn("Baby cloud load failed",error);
+  }
+}
+
+async function loadCurrentBabyFromCloud(showToast=true){
+  const baby=getBaby();
+  if(!baby || !getSharedBabyId(baby)) return;
+  await loadBabyFromCloudById(baby,showToast);
+}
+
+async function loadAllSharedBabiesFromCloud(showToast=true){
+  const babies=getAllSharedBabies();
+  for(const baby of babies){
+    await loadBabyFromCloudById(baby,showToast);
+  }
+}
+
+async function createCloudInvite(){
+  const baby=getBaby();
+  if(!baby) throw new Error("Nema aktivne bebe.");
+  let sharedBabyId=getSharedBabyId(baby);
+  if(!sharedBabyId){
+    sharedBabyId="baby_"+Date.now()+"_"+Math.random().toString(36).slice(2,10);
+    setSharedBabyIdForBaby(baby,sharedBabyId);
+  }
+
+  ensureBabyAccessPeopleFinal(baby);
+  await saveCurrentBabyToCloud();
+
+  const code=createInviteCode();
+  await supabaseFetch("baby_invite_codes",{
+    method:"POST",
+    headers:{"Prefer":"return=representation"},
+    body:JSON.stringify({
+      code,
+      shared_baby_id:sharedBabyId,
+      baby_name:currentBabyNameForInvite(),
+      created_by:getParentName()
+    })
+  });
+
+  startCloudPolling();
+  return code;
+}
+
+async function previewInviteByCode(code){
+  const cleanCode=String(code||"").trim().toUpperCase();
+  if(!cleanCode) throw new Error("Kod nije pronađen.");
+  const invites=await supabaseFetch(
+    "baby_invite_codes?code=eq."+encodeURIComponent(cleanCode)+"&select=code,shared_baby_id,baby_name,created_by&limit=1",
+    {method:"GET"}
+  );
+  if(!Array.isArray(invites)||!invites.length){
+    throw new Error("Pozivnica nije pronađena.");
+  }
+  return invites[0];
+}
+
+async function connectWithInviteCode(code,mode="replace"){
+  const cleanCode=String(code||"").trim().toUpperCase();
+  if(!cleanCode) throw new Error("Unesi kod.");
+
+  const invites=await supabaseFetch(
+    "baby_invite_codes?code=eq."+encodeURIComponent(cleanCode)+"&select=code,shared_baby_id,baby_name,created_by&limit=1",
+    {method:"GET"}
+  );
+  if(!Array.isArray(invites)||!invites.length) throw new Error("Kod nije pronađen.");
+
+  const sharedBabyId=invites[0].shared_baby_id;
+  const rows=await supabaseFetch(
+    "baby_snapshots?shared_baby_id=eq."+encodeURIComponent(sharedBabyId)+"&select=data,updated_at,updated_by&limit=1",
+    {method:"GET"}
+  );
+  if(!Array.isArray(rows)||!rows.length||!rows[0].data) throw new Error("Dnevnik nije pronađen.");
+
+  const remoteBaby=typeof normalizeBaby==="function" ? normalizeBaby(rows[0].data) : {...rows[0].data};
+  remoteBaby.id=uid("baby");
+  remoteBaby.cloud=remoteBaby.cloud||{};
+  remoteBaby.cloud.sharedBabyId=sharedBabyId;
+  remoteBaby.cloud.people=mergeAccessPeopleFinal(remoteBaby.cloud.people||[],[]);
+  ensureBabyAccessPeopleFinal(remoteBaby);
+
+  state.babies=Array.isArray(state.babies)?state.babies:[];
+  state.babies.push(remoteBaby);
+  selectedBabyId=remoteBaby.id;
+  localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+
+  remoteBaby.updatedAt=rows[0].updated_at||new Date().toISOString();
+  setLastBabyRemoteUpdatedAt(sharedBabyId,remoteBaby.updatedAt);
+  localStorage.setItem(KEY,JSON.stringify(state));
+
+  currentTab="diary";
+  currentDayId=null;
+  openCardId=null;
+
+  renderDiary();
+  startCloudPolling();
+
+  setBabyCloudEvent(remoteBaby,"joined","Osoba se povezala");
+  await saveCurrentBabyToCloud();
+
+  showTransferInfoModal("Dnevnik je povezan","Sada obe osobe mogu da prate i upisuju ovaj dnevnik.");
+}
+
+function saveState(){
+  state.updatedAt=new Date().toISOString();
+  localStorage.setItem(KEY,JSON.stringify(state));
+
+  const baby=getBaby();
+  if(getSharedBabyId(baby)){
+    setBabyCloudEvent(baby,"data_changed","Dnevnik je ažuriran");
+    queueCloudSave();
+  }
+}
+
+function renderAccessPeople(){
+  const baby=getBaby();
+  const people=ensureBabyAccessPeopleFinal(baby);
+  const currentDeviceId=getDeviceId();
+  return `<div class="access-people-block">
+    <div class="access-people-head">
+      <strong>Osobe sa pristupom (${people.length})</strong>
+      <small>Mogu da prate i upisuju ovaj dnevnik.</small>
+    </div>
+    <div class="access-people-chips">
+      ${people.map(person=>`
+        <button class="access-person-chip" type="button" data-person-id="${person.id}">
+          <span class="access-avatar">${escapeHtml(personInitials(person.name))}</span>
+          <span>
+            <strong>${escapeHtml(person.name||"Osoba")}${person.deviceId===currentDeviceId?" (Ti)":""}</strong>
+            <small>Može da upisuje</small>
+          </span>
+        </button>
+      `).join("")}
+    </div>
+  </div>`;
+}
+
+function removeActiveSharedBabyLocally(){
+  const baby=getBaby();
+  const sharedBabyId=getSharedBabyId(baby);
+  if(!baby || !sharedBabyId) return false;
+
+  state.babies=(state.babies||[]).filter(b=>b.id!==baby.id);
+  selectedBabyId=state.babies[0]?.id||null;
+  if(selectedBabyId){
+    localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+  }else{
+    localStorage.removeItem("babyDiaryCurrentBabyId");
+  }
+
+  localStorage.removeItem(getBabyRemoteKey(sharedBabyId));
+  localStorage.removeItem(babyEventSeenKey(sharedBabyId));
+  localStorage.setItem(KEY,JSON.stringify(state));
+
+  toast("Beba je uklonjena samo sa ovog telefona.");
+  renderDiary();
+  return true;
+}
+
+function leaveSharedDiaryLocally(){
+  return removeActiveSharedBabyLocally();
+}
+
+function confirmLeaveSharedDiary(){
+  document.getElementById("leaveSharedDiaryConfirm")?.remove();
+
+  const modal=document.createElement("div");
+  modal.id="leaveSharedDiaryConfirm";
+  modal.className="confirm-reminder-bg open";
+  modal.innerHTML=`
+    <div class="confirm-reminder-card">
+      <h2>Ukloniti bebu sa ovog telefona?</h2>
+      <p>Ova beba će biti uklonjena samo sa ovog telefona. Kod drugih osoba podaci ostaju sačuvani.</p>
+      <div class="confirm-reminder-actions">
+        <button type="button" class="cancel" id="cancelLeaveSharedDiary">Otkaži</button>
+        <button type="button" class="danger-action" id="confirmLeaveSharedDiary">Ukloni sa ovog telefona</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  document.getElementById("cancelLeaveSharedDiary").onclick=()=>modal.remove();
+  document.getElementById("confirmLeaveSharedDiary").onclick=()=>{
+    modal.remove();
+    removeActiveSharedBabyLocally();
+  };
+  modal.addEventListener("click",(event)=>{ if(event.target===modal) modal.remove(); });
+}
+
+function deleteBaby(id){
+  const baby=(state.babies||[]).find(b=>b.id===id) || getBaby();
+  if(baby?.cloud?.sharedBabyId){
+    selectedBabyId=baby.id;
+    localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+    confirmLeaveSharedDiary();
+    return;
+  }
+
+  state.babies=(state.babies||[]).filter(b=>b.id!==id);
+  selectedBabyId=state.babies[0]?.id||null;
+  if(selectedBabyId) localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+  else localStorage.removeItem("babyDiaryCurrentBabyId");
+  saveState();
+  renderDiary();
+}
+
+function confirmDeleteBaby(id){
+  const baby=(state.babies||[]).find(b=>b.id===id) || getBaby();
+  if(baby?.cloud?.sharedBabyId){
+    selectedBabyId=baby.id;
+    localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+    confirmLeaveSharedDiary();
+    return;
+  }
+  const ok=confirm("Da li želiš da obrišeš ovu bebu?");
+  if(!ok) return;
+  deleteBaby(id);
+}
+
+function startCloudPolling(){
+  if(window.__babyDiaryCloudPollingStarted) return;
+  window.__babyDiaryCloudPollingStarted=true;
+
+  loadAllSharedBabiesFromCloud(false);
+
+  setInterval(()=>{
+    loadAllSharedBabiesFromCloud(true);
+  },2500);
+
+  document.addEventListener("visibilitychange",()=>{
+    if(!document.hidden) loadAllSharedBabiesFromCloud(true);
+  });
+
+  window.addEventListener("focus",()=>{
+    loadAllSharedBabiesFromCloud(true);
+  });
+}
+
+async function saveCloudState(){
+  await saveCurrentBabyToCloud();
+}
+
+async function loadCloudState(showToast=true){
+  await loadAllSharedBabiesFromCloud(showToast);
+}
+
+// extra capture for UI delete buttons, including when only one shared baby exists
+document.addEventListener("click", function(event){
+  const target=event.target.closest("button, [role='button']");
+  if(!target) return;
+  const text=(target.textContent||"").toLowerCase();
+  const id=(target.id||"").toLowerCase();
+  const cls=(target.className||"").toString().toLowerCase();
+  const action=(target.dataset?.action||target.dataset?.babyAction||"").toLowerCase();
+
+  const looksLikeBabyDelete=
+    text.includes("obriši bebu") ||
+    text.includes("obrisi bebu") ||
+    text.includes("ukloni bebu") ||
+    text.includes("izbriši bebu") ||
+    id.includes("deletebaby") ||
+    id.includes("removebaby") ||
+    cls.includes("delete-baby") ||
+    cls.includes("remove-baby") ||
+    action.includes("delete-baby") ||
+    action.includes("remove-baby");
+
+  if(!looksLikeBabyDelete) return;
+  const baby=getBaby();
+  if(!baby?.cloud?.sharedBabyId) return;
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  confirmLeaveSharedDiary();
+}, true);
+
+window.addEventListener("DOMContentLoaded", ()=>{
+  setTimeout(()=>{
+    if(getAllSharedBabies().length) startCloudPolling();
+  },800);
+});
