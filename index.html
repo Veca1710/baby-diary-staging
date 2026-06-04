@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="sr-Latn">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <title>Dnevnik bebe v61</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Baby Diary">
+  <meta name="theme-color" content="#A8B993">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+</head>
+<body>
+  <main id="app">
+    <section class="app-shell">
+      <div class="hero">
+        <div class="hero-illustration">🧸</div>
+        <div>
+          <h1>Dobrodošli u dnevnik bebe</h1>
+          <p>Prati hranjenje, spavanje i dnevne aktivnosti na jednom mestu.</p>
+        </div>
+      </div>
+
+      <div class="form-card">
+        <label class="field">
+          <span>Ime bebe</span>
+          <input class="input" id="fallbackBabyName" placeholder="Unesi ime" />
+        </label>
+        <label class="field">
+          <span>Datum rođenja</span>
+          <input class="input" id="fallbackBabyBirth" type="date" />
+        </label>
+        <button class="primary" id="fallbackCreateBaby" type="button">Kreiraj dnevnik</button>
+      </div>
+    </section>
+  </main>
+  <noscript><div style='padding:16px'>Za ovu aplikaciju je potreban JavaScript.</div></noscript>
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
