@@ -56,8 +56,16 @@ function loadState(){
 function saveState(){
   state.updatedAt=new Date().toISOString();
   localStorage.setItem(KEY,JSON.stringify(state));
+
+  const lastEvent=state.cloud?.lastEvent;
+  const lastEventAt=lastEvent?.at ? new Date(lastEvent.at).getTime() : 0;
+  const isFreshSpecificEvent=lastEventAt && (Date.now()-lastEventAt<1200);
+
+  if(!isFreshSpecificEvent){
+    setCloudEvent("data_changed","Dnevnik je ažuriran");
+  }
+
   queueCloudSave();
-  queueRemoteSave();
 }
 function getBaby(){
   return (state.babies||[]).find(b=>b.id===selectedBabyId)||null;
@@ -3116,22 +3124,43 @@ async function ensureCloudFamilyCreated(){
   return familyId;
 }
 
+
+function setCloudEvent(type,label){
+  state.cloud={
+    ...(state.cloud||{}),
+    lastEvent:{
+      id:"event_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),
+      type,
+      label:label||"",
+      by:getParentName(),
+      deviceId:getDeviceId(),
+      at:new Date().toISOString()
+    }
+  };
+}
+
 async function saveCloudState(){
   const familyId=getCloudFamilyId();
   if(!familyId) return;
 
   try{
     const clean=prepareStateForCloud();
+    const updatedAt=new Date().toISOString();
+
     await supabaseFetch("app_snapshots?on_conflict=family_id",{
       method:"POST",
       headers:{"Prefer":"resolution=merge-duplicates,return=minimal"},
       body:JSON.stringify({
         family_id:familyId,
         data:clean,
-        updated_at:new Date().toISOString(),
+        updated_at:updatedAt,
         updated_by:getParentName()
       })
     });
+
+    state.updatedAt=updatedAt;
+    localStorage.setItem(KEY,JSON.stringify(state));
+    localStorage.setItem(CLOUD_LAST_REMOTE_KEY,updatedAt);
   }catch(error){
     console.warn("Cloud save failed",error);
   }
@@ -3154,14 +3183,18 @@ async function loadCloudState(showToast=true){
 
     if(!Array.isArray(rows)||!rows.length||!rows[0].data) return;
 
-    const remoteUpdatedAt=rows[0].updated_at||"";
+    const remoteData=rows[0].data;
+    const remoteUpdatedAt=rows[0].updated_at||remoteData.updatedAt||"";
     const localUpdatedAt=state?.updatedAt||"";
     const remoteTime=remoteUpdatedAt?new Date(remoteUpdatedAt).getTime():0;
     const localTime=localUpdatedAt?new Date(localUpdatedAt).getTime():0;
 
     if(remoteTime>localTime){
-      const oldState=JSON.stringify(state);
-      state=normalizeMultiBaby(rows[0].data);
+      const remoteCloud=remoteData.cloud||{};
+      const remoteEvent=remoteCloud.lastEvent||null;
+      const isOwnUpdate=remoteCloud.deviceId===getDeviceId() || remoteEvent?.deviceId===getDeviceId();
+
+      state=normalizeMultiBaby(remoteData);
       state.updatedAt=remoteUpdatedAt;
 
       localStorage.setItem(KEY,JSON.stringify(state));
@@ -3170,8 +3203,8 @@ async function loadCloudState(showToast=true){
 
       renderDiary();
 
-      if(showToast && oldState!==JSON.stringify(state)){
-        showCloudUpdateToast(rows[0].updated_by||"Drugi roditelj");
+      if(showToast && !isOwnUpdate){
+        showCloudUpdateToast(remoteEvent, rows[0].updated_by||remoteCloud.updatedBy||"Drugi roditelj");
       }
     }
   }catch(error){
@@ -3196,16 +3229,27 @@ function startCloudPolling(){
   });
 }
 
-function showCloudUpdateToast(parentName){
+function showCloudUpdateToast(eventOrName,parentNameFallback){
   document.getElementById("cloudUpdateToast")?.remove();
+
+  const event=typeof eventOrName==="object" && eventOrName ? eventOrName : null;
+  const parentName=event?.by || parentNameFallback || eventOrName || "Drugi roditelj";
+
+  let title="Nova izmena u dnevniku";
+  let message=`${parentName} je ažurirao/la dnevnik.`;
+
+  if(event?.type==="joined"){
+    title="Roditelj je povezan";
+    message=`${parentName} se povezao/la sa dnevnikom.`;
+  }
 
   const toastEl=document.createElement("div");
   toastEl.id="cloudUpdateToast";
   toastEl.className="cloud-update-toast show";
   toastEl.innerHTML=`
     <div>
-      <strong>Nova izmena u dnevniku</strong>
-      <span>${escapeHtml(parentName)} je ažurirao/la dnevnik.</span>
+      <strong>${escapeHtml(title)}</strong>
+      <span>${escapeHtml(message)}</span>
     </div>
     <button type="button" id="openCloudDiary">Otvori</button>
   `;
@@ -3295,6 +3339,11 @@ async function connectWithInviteCode(code,mode="replace"){
 
   renderDiary();
   startCloudPolling();
+
+  setCloudEvent("joined","Roditelj se povezao");
+  saveState();
+  await saveCloudState();
+
   showTransferInfoModal("Dnevnik je povezan","Sada oba roditelja mogu da prate i upisuju isti dnevnik.");
 }
 
@@ -3521,3 +3570,5 @@ window.addEventListener("DOMContentLoaded", ()=>{
   if(!code) return;
   setTimeout(()=>handleJoinLinkOnStart(),150);
 });
+
+// v2.0 cloud toast own-update and joined-event fix
