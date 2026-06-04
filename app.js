@@ -2868,10 +2868,12 @@ function inviteMessage(){
 
 Pozivam te da zajedno pratimo dnevnik za ${babyName}.
 
-Klikni na link:
+1. Otvori ovaj link:
 ${link}
 
-Ako nemaš aplikaciju, otvori link u browseru i dodaj aplikaciju na Home Screen.
+2. Ako nemaš aplikaciju, otvoriće se Baby Diary u browseru.
+3. Kada se otvori pozivnica, klikni "Poveži dnevnik".
+4. Posle toga možeš da dodaš aplikaciju na Home Screen.
 
 Rezervni kod za povezivanje: ${code}`;
 }
@@ -3349,3 +3351,173 @@ function openConnectCodeModal(){
     }
   };
 }
+
+
+
+function getJoinCodeFromUrl(){
+  try{
+    const params=new URLSearchParams(window.location.search);
+    const code=params.get("join");
+    return code ? code.trim().toUpperCase() : "";
+  }catch(error){
+    return "";
+  }
+}
+
+function clearJoinCodeFromUrl(){
+  try{
+    const url=new URL(window.location.href);
+    url.searchParams.delete("join");
+    window.history.replaceState({},document.title,url.pathname+url.search+url.hash);
+  }catch(error){}
+}
+
+async function previewInviteByCode(code){
+  const cleanCode=String(code||"").trim().toUpperCase();
+  if(!cleanCode) throw new Error("Kod nije pronađen.");
+
+  const invites=await supabaseFetch(
+    "invite_codes?code=eq."+encodeURIComponent(cleanCode)+"&select=code,family_id,baby_name,created_by&limit=1",
+    {method:"GET"}
+  );
+
+  if(!Array.isArray(invites)||!invites.length){
+    throw new Error("Pozivnica nije pronađena.");
+  }
+
+  return invites[0];
+}
+
+async function handleJoinLinkOnStart(){
+  const code=getJoinCodeFromUrl();
+  if(!code) return false;
+
+  try{
+    await loadSupabaseConfig();
+    const invite=await previewInviteByCode(code);
+    openJoinInviteScreen(invite);
+    return true;
+  }catch(error){
+    console.error(error);
+    openJoinInviteError(code,error.message||"Pozivnica nije mogla da se otvori.");
+    return true;
+  }
+}
+
+function openJoinInviteScreen(invite){
+  document.getElementById("app").innerHTML=`
+    <main class="join-screen">
+      <section class="join-card">
+        <div class="join-illustration">👶<span>🔗</span></div>
+        <h1>Poziv za Baby Diary</h1>
+        <p>Pozvani ste da se povežete sa dnevnikom za:</p>
+        <strong>${escapeHtml(invite.baby_name||"bebu")}</strong>
+        <small>Poziv je poslao/la ${escapeHtml(invite.created_by||"drugi roditelj")}.</small>
+
+        <div class="join-actions">
+          <button class="primary" id="acceptJoinInvite" type="button">Poveži dnevnik</button>
+          <button class="cancel" id="declineJoinInvite" type="button">Ne sada</button>
+        </div>
+      </section>
+    </main>
+  `;
+
+  document.getElementById("declineJoinInvite").onclick=()=>{
+    clearJoinCodeFromUrl();
+    renderDiary();
+  };
+
+  document.getElementById("acceptJoinInvite").onclick=()=>{
+    openJoinModeModal(invite.code);
+  };
+}
+
+function openJoinInviteError(code,message){
+  document.getElementById("app").innerHTML=`
+    <main class="join-screen">
+      <section class="join-card">
+        <div class="join-illustration">⚠️</div>
+        <h1>Pozivnica nije otvorena</h1>
+        <p>${escapeHtml(message)}</p>
+        <small>Kod: ${escapeHtml(code)}</small>
+
+        <div class="join-actions">
+          <button class="primary" id="retryJoinInvite" type="button">Pokušaj ponovo</button>
+          <button class="cancel" id="closeJoinError" type="button">Nastavi bez povezivanja</button>
+        </div>
+      </section>
+    </main>
+  `;
+
+  document.getElementById("retryJoinInvite").onclick=()=>handleJoinLinkOnStart();
+  document.getElementById("closeJoinError").onclick=()=>{
+    clearJoinCodeFromUrl();
+    renderDiary();
+  };
+}
+
+function openJoinModeModal(code){
+  const hasExisting=(state.babies||[]).length>0;
+
+  if(!hasExisting){
+    askParentNameAndConnect(code,"replace");
+    return;
+  }
+
+  document.getElementById("joinModeModal")?.remove();
+
+  const modal=document.createElement("div");
+  modal.id="joinModeModal";
+  modal.className="confirm-reminder-bg open";
+  modal.innerHTML=`
+    <div class="confirm-reminder-card">
+      <h2>Na ovom telefonu već postoje podaci</h2>
+      <p>Kako želiš da nastaviš?</p>
+
+      <div class="import-options">
+        <label><input type="radio" name="joinMode" value="append" checked> Dodaj deljeni dnevnik kao novu bebu</label>
+        <small>Najbezbednije ako nisi siguran/na.</small>
+
+        <label><input type="radio" name="joinMode" value="replace"> Zameni moje podatke deljenim dnevnikom</label>
+        <small>Koristi samo ako želiš da ovaj telefon koristi podatke iz pozivnice.</small>
+      </div>
+
+      <div class="confirm-reminder-actions">
+        <button type="button" class="cancel" id="cancelJoinMode">Otkaži</button>
+        <button type="button" class="save" id="confirmJoinMode">Nastavi</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  document.getElementById("cancelJoinMode").onclick=()=>modal.remove();
+  modal.addEventListener("click",(event)=>{ if(event.target===modal) modal.remove(); });
+
+  document.getElementById("confirmJoinMode").onclick=()=>{
+    const mode=document.querySelector('input[name="joinMode"]:checked')?.value||"append";
+    modal.remove();
+    askParentNameAndConnect(code,mode);
+  };
+}
+
+async function askParentNameAndConnect(code,mode){
+  const parentName=prompt("Kako želiš da se tvoje ime prikazuje drugom roditelju?", getParentName());
+  if(parentName) setParentName(parentName);
+
+  try{
+    await connectWithInviteCode(code,mode);
+    clearJoinCodeFromUrl();
+  }catch(error){
+    console.error(error);
+    showTransferInfoModal("Povezivanje nije uspelo", error.message || "Proveri kod i pokušaj ponovo.");
+  }
+}
+
+
+// v20 join link startup guard
+window.addEventListener("DOMContentLoaded", ()=>{
+  const code=getJoinCodeFromUrl();
+  if(!code) return;
+  setTimeout(()=>handleJoinLinkOnStart(),150);
+});
