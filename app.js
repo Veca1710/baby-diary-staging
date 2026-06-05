@@ -5385,3 +5385,162 @@ document.addEventListener("click", function(event){
 }, true);
 
 // v2.0 real owner name onboarding and settings fix
+
+/* v21 final fix: owner name persistence + settings-only placement */
+(function(){
+  function ownerNameValue(){
+    const value=(localStorage.getItem(CLOUD_PARENT_KEY)||"").trim();
+    return value && value!=="Osoba" ? value : "";
+  }
+
+  function saveOwnerNameEverywhere(name){
+    const clean=(name||"").trim();
+    if(!clean) return;
+    localStorage.setItem(CLOUD_PARENT_KEY,clean);
+    try{ setParentName(clean); }catch(error){}
+    try{
+      state=state||{version:2,babies:[]};
+      state.ownerName=clean;
+      const baby=getBaby?.();
+      if(baby){ baby.ownerName=clean; baby.updatedAt=new Date().toISOString(); }
+      localStorage.setItem(KEY,JSON.stringify(state));
+    }catch(error){}
+  }
+
+  // Replace old first-run onboarding so the user name is a real field, not a runtime injection.
+  renderOnboarding=function(){
+    app.innerHTML=`<section class="app-shell">
+      <div class="hero">
+        <div class="hero-illustration">🧸</div>
+        <div>
+          <h1>Dobrodošli u dnevnik bebe</h1>
+          <p>Prvo unesite svoje ime i osnovne podatke bebe.</p>
+        </div>
+      </div>
+      <div class="form-card">
+        <label class="field"><span>Vaše ime</span><input class="input" id="ownerName" placeholder="Unesi svoje ime" value="${escapeHtml(ownerNameValue())}" autocomplete="name"></label>
+        <label class="field"><span>Ime bebe</span><input class="input" id="babyName" placeholder="Unesi ime"></label>
+        <label class="field"><span>Datum rođenja</span><input class="input" id="babyBirth" type="date"></label>
+        <button class="primary" id="createBaby" type="button">Kreiraj dnevnik</button>
+        <button class="demo-link" id="seedDemo" type="button">Prikaži demo dnevnik</button>
+      </div>
+    </section>`;
+  };
+
+  // Take over create flow before older handlers, so the owner name is saved before renderDiary() removes onboarding DOM.
+  document.addEventListener("click",function(event){
+    const createBtn=event.target.closest("#createBaby, #fallbackCreateBaby");
+    if(!createBtn) return;
+    const ownerInput=document.getElementById("ownerName") || document.getElementById("onboardingPersonName");
+    const babyNameInput=document.getElementById("babyName") || document.getElementById("onboardingBabyName") || document.getElementById("fallbackBabyName");
+    const birthInput=document.getElementById("babyBirth") || document.getElementById("fallbackBabyBirth");
+    if(!babyNameInput) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    const ownerName=(ownerInput?.value||"").trim();
+    const babyName=(babyNameInput?.value||"").trim();
+    ownerInput?.classList.remove("field-error");
+    babyNameInput?.classList.remove("field-error");
+
+    if(!ownerName){
+      ownerInput?.classList.add("field-error");
+      ownerInput?.focus();
+      toast?.("Unesi svoje ime.");
+      return;
+    }
+    if(!babyName){
+      babyNameInput?.classList.add("field-error");
+      babyNameInput?.focus();
+      toast?.("Unesi ime bebe.");
+      return;
+    }
+
+    saveOwnerNameEverywhere(ownerName);
+
+    const baby={
+      id:uid("baby"),
+      name:babyName,
+      birthDate:birthInput?.value||"",
+      avatar:"",
+      days:[],
+      reminders:[],
+      cloud:{},
+      ownerName,
+      createdAt:new Date().toISOString(),
+      updatedAt:new Date().toISOString()
+    };
+
+    state={version:2,ownerName,updatedAt:new Date().toISOString(),babies:[baby]};
+    selectedBabyId=baby.id;
+    currentDayId=null;
+    openCardId=null;
+    currentTab="diary";
+    localStorage.setItem(KEY,JSON.stringify(state));
+    localStorage.setItem("babyDiaryCurrentBabyId",baby.id);
+    renderDiary();
+  }, true);
+
+  function removeOwnerNameFromDiary(){
+    document.querySelectorAll("#app .owner-name-settings-section").forEach(el=>el.remove());
+  }
+
+  function ensureOwnerNameInSettings(){
+    removeOwnerNameFromDiary();
+    const settingsPage=document.querySelector("#settingsScreen .settings-page");
+    if(!settingsPage) return;
+    if(settingsPage.querySelector(".owner-name-settings-section")){
+      const small=settingsPage.querySelector(".owner-name-settings-section small");
+      if(small) small.textContent=ownerNameValue() || "Nije dodato";
+      return;
+    }
+    const section=document.createElement("section");
+    section.className="settings-section owner-name-settings-section";
+    section.innerHTML=`
+      <h2>Korisnik</h2>
+      <div class="settings-card">
+        <button class="settings-action" id="changeOwnerName" type="button">
+          <span>
+            <strong>Vaše ime</strong>
+            <small>${escapeHtml(ownerNameValue() || "Nije dodato")}</small>
+          </span>
+          ${icon("right")}
+        </button>
+      </div>`;
+    const firstSection=settingsPage.querySelector(".settings-section");
+    if(firstSection) settingsPage.insertBefore(section,firstSection);
+    else settingsPage.appendChild(section);
+    const btn=section.querySelector("#changeOwnerName");
+    if(btn) btn.onclick=openChangeOwnerNameModal;
+  }
+
+  const previousOpenSettingsPage=openSettingsPage;
+  openSettingsPage=function(){
+    previousOpenSettingsPage();
+    setTimeout(ensureOwnerNameInSettings,0);
+  };
+
+  const previousRenderDiary=renderDiary;
+  renderDiary=function(){
+    previousRenderDiary();
+    removeOwnerNameFromDiary();
+  };
+
+  // Disable the old broad injector that placed Korisnik on the Dnevnik page.
+  injectOwnerNameSettings=function(){ ensureOwnerNameInSettings(); };
+
+  document.addEventListener("click",function(event){
+    const target=event.target.closest("#changeOwnerName");
+    if(!target) return;
+    event.preventDefault();
+    event.stopPropagation();
+    openChangeOwnerNameModal();
+  }, true);
+
+  window.addEventListener("DOMContentLoaded",()=>{
+    setTimeout(removeOwnerNameFromDiary,150);
+    setTimeout(removeOwnerNameFromDiary,700);
+  });
+})();
