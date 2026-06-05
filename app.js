@@ -978,6 +978,11 @@ function openReminderModal(reminderId=null){
 
 
 function renderDiary(){
+  if(!state.babies || !state.babies.length){
+    renderEmptyBabyOnboarding();
+    return;
+  }
+
   const baby=getBaby();
   if(!baby){ return renderOnboarding(); }
   const day=ensureDay();
@@ -3183,10 +3188,19 @@ function getParentName(){
 }
 
 function setParentName(name){
-  localStorage.setItem(CLOUD_PARENT_KEY,(name||"Osoba").trim()||"Osoba");
-  if(typeof state==="object" && state){
-    addOrUpdateAccessPerson((name||"Osoba").trim()||"Osoba",getDeviceId());
-  }
+  const clean=(name||"").trim()||"Osoba";
+  localStorage.setItem(CLOUD_PARENT_KEY,clean);
+
+  try{
+    const baby=getBaby();
+    if(baby?.cloud?.sharedBabyId && typeof addOrUpdateBabyAccessPerson==="function"){
+      addOrUpdateBabyAccessPerson(baby,clean,getDeviceId());
+      localStorage.setItem(KEY,JSON.stringify(state));
+    }else if(typeof addOrUpdateAccessPerson==="function"){
+      addOrUpdateAccessPerson(clean,getDeviceId());
+      localStorage.setItem(KEY,JSON.stringify(state));
+    }
+  }catch(error){}
 }
 
 function getCloudFamilyId(){
@@ -5068,3 +5082,306 @@ document.addEventListener("click", function(event){
 }, true);
 
 // v2.0 display name onboarding before baby setup
+
+
+
+/* v2.0 explicit onboarding fields: display name + baby name */
+
+function renderEmptyBabyOnboarding(){
+  const savedName=(localStorage.getItem(CLOUD_PARENT_KEY)||"").trim();
+
+  document.getElementById("app").innerHTML=`
+    <main class="onboarding-screen">
+      <section class="onboarding-card">
+        <div class="join-illustration">👶</div>
+        <h1>Dobrodošli u Baby Diary</h1>
+        <p>Prvo unesite svoje ime i ime bebe.</p>
+
+        <label class="onboarding-field">
+          <span>Vaše ime</span>
+          <input class="input" id="onboardingPersonName" placeholder="npr. Mama, Tata, Baka..." value="${escapeHtml(savedName && savedName!=="Osoba" ? savedName : "")}" autocomplete="name">
+        </label>
+
+        <label class="onboarding-field">
+          <span>Ime bebe</span>
+          <input class="input" id="onboardingBabyName" placeholder="npr. Timo" autocomplete="off">
+        </label>
+
+        <button class="primary onboarding-primary" id="createFirstBabyWithName" type="button">Započni dnevnik</button>
+      </section>
+    </main>
+  `;
+
+  const personInput=document.getElementById("onboardingPersonName");
+  const babyInput=document.getElementById("onboardingBabyName");
+
+  setTimeout(()=>personInput?.focus(),120);
+
+  function create(){
+    const personName=(personInput.value||"").trim();
+    const babyName=(babyInput.value||"").trim();
+
+    personInput.classList.remove("field-error");
+    babyInput.classList.remove("field-error");
+
+    if(!personName){
+      personInput.classList.add("field-error");
+      personInput.focus();
+      return;
+    }
+
+    if(!babyName){
+      babyInput.classList.add("field-error");
+      babyInput.focus();
+      return;
+    }
+
+    setParentName(personName);
+
+    const baby={
+      id:uid("baby"),
+      name:babyName,
+      birthDate:"",
+      avatar:"",
+      days:[],
+      reminders:[],
+      cloud:{},
+      createdAt:new Date().toISOString(),
+      updatedAt:new Date().toISOString()
+    };
+
+    state.babies=[baby];
+    selectedBabyId=baby.id;
+    localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+    saveState();
+    renderDiary();
+  }
+
+  document.getElementById("createFirstBabyWithName").onclick=create;
+
+  [personInput,babyInput].forEach(input=>{
+    input.addEventListener("keydown",(event)=>{
+      if(event.key==="Enter") create();
+    });
+  });
+}
+
+// v2.0 explicit onboarding fields fix
+
+
+// v20 existing onboarding owner name guard
+document.addEventListener("click", function(event){
+  const target=event.target.closest("button, [role='button']");
+  if(!target) return;
+
+  const text=(target.textContent||"").toLowerCase();
+  const isCreateDiary=text.includes("kreiraj dnevnik") || text.includes("započni dnevnik") || text.includes("zapocni dnevnik");
+  if(!isCreateDiary) return;
+
+  const ownerInput=document.getElementById("ownerName");
+  if(!ownerInput) return;
+
+  const ownerName=(ownerInput.value||"").trim();
+  if(!ownerName){
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    ownerInput.classList.add("field-error");
+    ownerInput.focus();
+    return;
+  }
+
+  setParentName(ownerName);
+}, true);
+
+// v2.0 existing onboarding owner name field fix
+
+
+
+/* v2.0 owner name runtime patch */
+
+function getOwnerNameValue(){
+  const value=(localStorage.getItem(CLOUD_PARENT_KEY)||"").trim();
+  return value && value!=="Osoba" ? value : "";
+}
+
+function applyOwnerNameFieldToOnboarding(){
+  const app=document.getElementById("app");
+  if(!app) return;
+
+  const text=(app.textContent||"").toLowerCase();
+  const hasBabyName=text.includes("ime bebe");
+  const hasCreate=text.includes("kreiraj dnevnik");
+  if(!hasBabyName || !hasCreate || document.getElementById("ownerName")) return;
+
+  const inputs=[...app.querySelectorAll("input")];
+  const babyNameInput=inputs.find(input=>{
+    const ph=(input.getAttribute("placeholder")||"").toLowerCase();
+    const id=(input.id||"").toLowerCase();
+    return ph.includes("ime") || id.includes("baby") || id.includes("name");
+  }) || inputs[0];
+
+  if(!babyNameInput) return;
+
+  const wrapper=document.createElement("div");
+  wrapper.className="owner-name-onboarding-field";
+  wrapper.innerHTML=`
+    <label for="ownerName">Vaše ime</label>
+    <input id="ownerName" class="${babyNameInput.className||""}" placeholder="Unesi svoje ime" autocomplete="name" value="${escapeHtml(getOwnerNameValue())}">
+  `;
+
+  const exactLabels=[...app.querySelectorAll("label, span, div, p")].filter(el=>(el.textContent||"").trim().toLowerCase()==="ime bebe");
+  const babyLabel=exactLabels[0];
+
+  if(babyLabel && babyLabel.parentNode){
+    babyLabel.parentNode.insertBefore(wrapper,babyLabel);
+  }else if(babyNameInput.parentNode){
+    babyNameInput.parentNode.insertBefore(wrapper,babyNameInput);
+  }
+}
+
+function ensureOwnerNameBeforeCreate(event){
+  const target=event.target.closest("button, [role='button']");
+  if(!target) return;
+
+  const text=(target.textContent||"").toLowerCase();
+  const isCreate=text.includes("kreiraj dnevnik") || text.includes("započni dnevnik") || text.includes("zapocni dnevnik");
+  if(!isCreate) return;
+
+  const ownerInput=document.getElementById("ownerName");
+  if(!ownerInput) return;
+
+  const ownerName=(ownerInput.value||"").trim();
+  ownerInput.classList.remove("field-error");
+
+  if(!ownerName){
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    ownerInput.classList.add("field-error");
+    ownerInput.focus();
+    return;
+  }
+
+  setParentName(ownerName);
+}
+
+document.addEventListener("click", ensureOwnerNameBeforeCreate, true);
+
+window.addEventListener("DOMContentLoaded",()=>{
+  const apply=()=>applyOwnerNameFieldToOnboarding();
+  setTimeout(apply,50);
+  setTimeout(apply,250);
+  setTimeout(apply,800);
+  setTimeout(apply,1500);
+  const app=document.getElementById("app");
+  if(app){
+    new MutationObserver(apply).observe(app,{childList:true,subtree:true});
+  }
+});
+
+
+
+function openChangeOwnerNameModal(){
+  document.getElementById("changeOwnerNameModal")?.remove();
+
+  const modal=document.createElement("div");
+  modal.id="changeOwnerNameModal";
+  modal.className="confirm-reminder-bg open";
+  modal.innerHTML=`
+    <div class="confirm-reminder-card">
+      <h2>Promeni vaše ime</h2>
+      <p>Ovo ime se prikazuje u deljenim dnevnicima.</p>
+      <input class="input" id="changeOwnerNameInput" placeholder="Unesi svoje ime" value="${escapeHtml(getOwnerNameValue())}" autocomplete="name">
+      <div class="confirm-reminder-actions">
+        <button type="button" class="cancel" id="cancelChangeOwnerName">Otkaži</button>
+        <button type="button" class="save" id="saveChangeOwnerName">Sačuvaj</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  const input=document.getElementById("changeOwnerNameInput");
+  setTimeout(()=>input?.focus(),100);
+
+  function save(){
+    const value=(input.value||"").trim();
+    input.classList.remove("field-error");
+    if(!value){
+      input.classList.add("field-error");
+      input.focus();
+      return;
+    }
+    setParentName(value);
+    try{
+      const baby=getBaby();
+      if(baby?.cloud?.sharedBabyId && typeof addOrUpdateBabyAccessPerson==="function"){
+        addOrUpdateBabyAccessPerson(baby,value,getDeviceId());
+        localStorage.setItem(KEY,JSON.stringify(state));
+        if(typeof saveCurrentBabyToCloud==="function") saveCurrentBabyToCloud();
+        else if(typeof saveCloudState==="function") saveCloudState();
+      }
+    }catch(error){}
+    modal.remove();
+    renderDiary();
+  }
+
+  document.getElementById("cancelChangeOwnerName").onclick=()=>modal.remove();
+  document.getElementById("saveChangeOwnerName").onclick=save;
+  input.addEventListener("keydown",(event)=>{ if(event.key==="Enter") save(); });
+  modal.addEventListener("click",(event)=>{ if(event.target===modal) modal.remove(); });
+}
+
+function injectOwnerNameSettings(){
+  const app=document.getElementById("app");
+  if(!app) return;
+
+  const text=(app.textContent||"").toLowerCase();
+  if(!text.includes("podešavanja") && !text.includes("podesavanja")) return;
+  if(document.querySelector(".owner-name-settings-section")) return;
+
+  const name=getOwnerNameValue() || "Nije dodato";
+  const section=document.createElement("section");
+  section.className="settings-section owner-name-settings-section";
+  section.innerHTML=`
+    <h2>Korisnik</h2>
+    <div class="settings-card">
+      <button class="settings-action" id="changeOwnerName" type="button">
+        <span>
+          <strong>Vaše ime</strong>
+          <small>${escapeHtml(name)}</small>
+        </span>
+        <span class="settings-chevron">›</span>
+      </button>
+    </div>
+  `;
+
+  const podaciHeading=[...app.querySelectorAll("h2,h3")].find(el=>(el.textContent||"").trim().toLowerCase()==="podaci");
+  if(podaciHeading && podaciHeading.parentNode){
+    podaciHeading.parentNode.insertBefore(section,podaciHeading);
+  }else{
+    const main=app.querySelector("main")||app.firstElementChild||app;
+    main.appendChild(section);
+  }
+
+  const btn=document.getElementById("changeOwnerName");
+  if(btn) btn.onclick=openChangeOwnerNameModal;
+}
+
+window.addEventListener("DOMContentLoaded",()=>{
+  const inject=()=>injectOwnerNameSettings();
+  setTimeout(inject,100);
+  setTimeout(inject,500);
+  const app=document.getElementById("app");
+  if(app) new MutationObserver(inject).observe(app,{childList:true,subtree:true});
+});
+
+document.addEventListener("click", function(event){
+  const target=event.target.closest("#changeOwnerName");
+  if(!target) return;
+  event.preventDefault();
+  event.stopPropagation();
+  openChangeOwnerNameModal();
+}, true);
+
+// v2.0 real owner name onboarding and settings fix
