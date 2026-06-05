@@ -312,7 +312,7 @@ function renderOnboarding(){
     <div class="hero">
       <div class="hero-illustration">🧸</div>
       <div>
-        <h1>Dobrodošli u dnevnik bebe</h1>
+        <h1>Dobrodošli u Dnevnik Bebe</h1>
         <p>Prati hranjenje, spavanje i dnevne aktivnosti na jednom mestu.</p>
       </div>
     </div>
@@ -320,7 +320,6 @@ function renderOnboarding(){
       <label class="field"><span>Ime bebe</span><input class="input" id="babyName" placeholder="Unesi ime"></label>
       <label class="field"><span>Datum rođenja</span><input class="input" id="babyBirth" type="date"></label>
       <button class="primary" id="createBaby">Kreiraj dnevnik</button>
-      <button class="demo-link" id="seedDemo" type="button">Prikaži demo dnevnik</button>
     </div>
   </section>`;
 }
@@ -5139,7 +5138,7 @@ function renderEmptyBabyOnboarding(){
     <main class="onboarding-screen">
       <section class="onboarding-card">
         <div class="join-illustration">👶</div>
-        <h1>Dobrodošli u Baby Diary</h1>
+        <h1>Dobrodošli u Dnevnik Bebe</h1>
         <p>Prvo unesite svoje ime i ime bebe.</p>
 
         <label class="onboarding-field">
@@ -5458,7 +5457,7 @@ document.addEventListener("click", function(event){
       <div class="hero">
         <div class="hero-illustration">🧸</div>
         <div>
-          <h1>Dobrodošli u dnevnik bebe</h1>
+          <h1>Dobrodošli u Dnevnik Bebe</h1>
           <p>Prvo unesite svoje ime i osnovne podatke bebe.</p>
         </div>
       </div>
@@ -5467,8 +5466,7 @@ document.addEventListener("click", function(event){
         <label class="field"><span>Ime bebe</span><input class="input" id="babyName" placeholder="Unesi ime"></label>
         <label class="field"><span>Datum rođenja</span><input class="input" id="babyBirth" type="date"></label>
         <button class="primary" id="createBaby" type="button">Kreiraj dnevnik</button>
-        <button class="demo-link" id="seedDemo" type="button">Prikaži demo dnevnik</button>
-      </div>
+        </div>
     </section>`;
   };
 
