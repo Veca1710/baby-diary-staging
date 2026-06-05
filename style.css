@@ -4601,3 +4601,16 @@ textarea{
 .owner-name-settings-section{
   margin-bottom:22px;
 }
+
+/* v22: owner-name modal must appear above the share sheet */
+.owner-name-modal-top,
+#displayNameModal,
+#changeOwnerNameModal{
+  z-index: 900 !important;
+}
+.owner-name-modal-top .confirm-reminder-card,
+#displayNameModal .confirm-reminder-card,
+#changeOwnerNameModal .confirm-reminder-card{
+  position: relative;
+  z-index: 901 !important;
+}

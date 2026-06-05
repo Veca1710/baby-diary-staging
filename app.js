@@ -35,14 +35,19 @@ function safeParse(v){try{return v?JSON.parse(v):null}catch(e){return null}}
 function normalizeMultiBaby(data){
   if(!data || !Array.isArray(data.babies)) return null;
   return {
+    ...data,
     version:2,
+    ownerName:data.ownerName||data.parentName||"",
     migratedAt:data.migratedAt||null,
     updatedAt:data.updatedAt||null,
     babies:data.babies.map(b=>({
+      ...b,
       id:b.id||uid("baby"),
       name:b.name||"Moja beba",
       birthDate:b.birthDate||"",
       avatar:b.avatar||"",
+      ownerName:b.ownerName||data.ownerName||"",
+      cloud:b.cloud||{},
       reminders:Array.isArray(b.reminders)?b.reminders:[],
       days:Array.isArray(b.days)?b.days:[]
     }))
@@ -1302,6 +1307,19 @@ function openSettingsPage(){
       </div>
       <div class="settings-menu-backdrop" id="settingsMenuBackdrop"></div>
 
+      <section class="settings-section owner-name-settings-section">
+        <h2>Korisnik</h2>
+        <div class="settings-card">
+          <button class="settings-action" id="changeOwnerName" type="button">
+            <span>
+              <strong>Vaše ime</strong>
+              <small>${escapeHtml((typeof getParentName === "function" && getParentName() !== "Osoba") ? getParentName() : (state.ownerName || getBaby()?.ownerName || "Nije dodato"))}</small>
+            </span>
+            ${icon("right")}
+          </button>
+        </div>
+      </section>
+
       <section class="settings-section">
         <h2>Upravljanje bebama</h2>
         <div class="settings-card" id="settingsBabiesList"></div>
@@ -2521,31 +2539,58 @@ window.addEventListener("load", function(){
 
 
 // Robust create handler for static fallback + rendered onboarding
+// v23: owner-aware first-run create handler. This handler must run before the old fallback can create a baby without ownerName.
 document.addEventListener("click", function(event){
   const createBtn = event.target.closest("#createBaby, #fallbackCreateBaby");
   if(!createBtn) return;
 
   event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
 
   try{
-    const nameInput = document.getElementById("babyName") || document.getElementById("fallbackBabyName");
+    const ownerInput = document.getElementById("ownerName") || document.getElementById("onboardingPersonName");
+    const nameInput = document.getElementById("babyName") || document.getElementById("onboardingBabyName") || document.getElementById("fallbackBabyName");
     const birthInput = document.getElementById("babyBirth") || document.getElementById("fallbackBabyBirth");
 
-    const name = (nameInput?.value || "").trim();
-    if(!name){
+    const ownerName = (ownerInput?.value || "").trim();
+    const babyName = (nameInput?.value || "").trim();
+
+    ownerInput?.classList.remove("field-error");
+    nameInput?.classList.remove("field-error");
+
+    if(!ownerName){
+      ownerInput?.classList.add("field-error");
+      ownerInput?.focus();
+      toast("Unesi svoje ime.");
+      return;
+    }
+    if(!babyName){
+      nameInput?.classList.add("field-error");
+      nameInput?.focus();
       toast("Unesi ime bebe.");
       return;
     }
 
+    localStorage.setItem(typeof CLOUD_PARENT_KEY !== "undefined" ? CLOUD_PARENT_KEY : "babyDiaryParentName", ownerName);
+    localStorage.setItem("babyDiaryOwnerNameV1", ownerName);
+
     const baby = {
       id: uid("baby"),
-      name,
+      name: babyName,
       birthDate: birthInput?.value || "",
-      days: []
+      avatar: "",
+      ownerName,
+      cloud: {},
+      reminders: [],
+      days: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
     state = {
       version: 2,
+      ownerName,
       updatedAt: new Date().toISOString(),
       babies: [baby]
     };
@@ -5543,4 +5588,209 @@ document.addEventListener("click", function(event){
     setTimeout(removeOwnerNameFromDiary,150);
     setTimeout(removeOwnerNameFromDiary,700);
   });
+})();
+
+/* v22 bugfix: persistent owner name, modal layering, and invite fallback cleanup */
+(function(){
+  const OWNER_NAME_KEYS=[typeof CLOUD_PARENT_KEY!=="undefined" ? CLOUD_PARENT_KEY : "babyDiaryParentName", "babyDiaryOwnerNameV1"];
+
+  function cleanOwnerName(value){
+    const clean=String(value||"").trim();
+    return clean && clean!=="Osoba" ? clean : "";
+  }
+
+  function readOwnerName(){
+    for(const key of OWNER_NAME_KEYS){
+      const value=cleanOwnerName(localStorage.getItem(key));
+      if(value) return value;
+    }
+    const stateName=cleanOwnerName(state?.ownerName);
+    if(stateName) return stateName;
+    const babyName=cleanOwnerName(getBaby?.()?.ownerName);
+    if(babyName) return babyName;
+    return "";
+  }
+
+  function persistOwnerName(name,{render=false}={}){
+    const clean=cleanOwnerName(name);
+    if(!clean) return "";
+
+    OWNER_NAME_KEYS.forEach(key=>localStorage.setItem(key,clean));
+
+    try{
+      state=state||{version:2,babies:[]};
+      state.ownerName=clean;
+      state.updatedAt=new Date().toISOString();
+
+      const baby=getBaby?.();
+      if(baby){
+        baby.ownerName=clean;
+        baby.cloud=baby.cloud||{};
+        if(typeof addOrUpdateBabyAccessPerson==="function"){
+          addOrUpdateBabyAccessPerson(baby,clean,getDeviceId());
+        }else if(typeof addOrUpdateAccessPerson==="function"){
+          addOrUpdateAccessPerson(clean,getDeviceId());
+        }
+        baby.updatedAt=new Date().toISOString();
+      }
+      localStorage.setItem(KEY,JSON.stringify(state));
+    }catch(error){}
+
+    try{ saveCurrentBabyToCloud?.(); }catch(error){}
+    if(render) renderDiary?.();
+    return clean;
+  }
+
+  // Migrate any older saved value immediately, then keep localStorage/state in sync.
+  persistOwnerName(readOwnerName());
+
+  getParentName=function(){ return readOwnerName() || "Osoba"; };
+  setParentName=function(name){ return persistOwnerName(name); };
+
+  if(typeof getOwnerNameValue==="function"){
+    getOwnerNameValue=function(){ return readOwnerName(); };
+  }
+
+  hasDisplayName=function(){ return !!readOwnerName(); };
+
+  askDisplayNameIfMissing=function(callback){
+    if(hasDisplayName()){
+      if(typeof callback==="function") callback();
+      return;
+    }
+
+    document.getElementById("displayNameModal")?.remove();
+
+    const modal=document.createElement("div");
+    modal.id="displayNameModal";
+    modal.className="confirm-reminder-bg open owner-name-modal-top";
+    modal.innerHTML=`
+      <div class="confirm-reminder-card">
+        <h2>Vaše ime</h2>
+        <p>Unesite ime koje će se prikazivati u deljenom dnevniku.</p>
+        <input class="input" id="displayNameInput" placeholder="npr. Mama, Tata, Baka..." autocomplete="name" value="${escapeHtml(readOwnerName())}">
+        <div class="confirm-reminder-actions">
+          <button type="button" class="cancel" id="cancelDisplayName">Kasnije</button>
+          <button type="button" class="save" id="saveDisplayName">Sačuvaj</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(modal);
+    const input=document.getElementById("displayNameInput");
+    setTimeout(()=>input?.focus(),100);
+
+    function close(){ modal.remove(); }
+    function save(){
+      const value=(input.value||"").trim();
+      input.classList.remove("field-error");
+      if(!value){ input.classList.add("field-error"); input.focus(); return; }
+      persistOwnerName(value,{render:true});
+      close();
+      if(typeof callback==="function") callback();
+    }
+
+    document.getElementById("cancelDisplayName").onclick=()=>{ close(); if(typeof callback==="function") callback(); };
+    document.getElementById("saveDisplayName").onclick=save;
+    input.addEventListener("keydown",event=>{ if(event.key==="Enter") save(); });
+  };
+
+  safeInviteNamePrompt=function(){
+    if(hasDisplayName()) return Promise.resolve(getParentName());
+    return new Promise(resolve=>{
+      askDisplayNameIfMissing(()=>resolve(getParentName()));
+    });
+  };
+
+  openChangeOwnerNameModal=function(){
+    document.getElementById("changeOwnerNameModal")?.remove();
+
+    const modal=document.createElement("div");
+    modal.id="changeOwnerNameModal";
+    modal.className="confirm-reminder-bg open owner-name-modal-top";
+    modal.innerHTML=`
+      <div class="confirm-reminder-card">
+        <h2>Vaše ime</h2>
+        <p>Unesite ime koje će se prikazivati u deljenom dnevniku.</p>
+        <input class="input" id="changeOwnerNameInput" placeholder="npr. Mama, Tata, Baka..." value="${escapeHtml(readOwnerName())}" autocomplete="name">
+        <div class="confirm-reminder-actions">
+          <button type="button" class="cancel" id="cancelChangeOwnerName">Otkaži</button>
+          <button type="button" class="save" id="saveChangeOwnerName">Sačuvaj</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(modal);
+    const input=document.getElementById("changeOwnerNameInput");
+    setTimeout(()=>input?.focus(),100);
+
+    function save(){
+      const value=(input.value||"").trim();
+      input.classList.remove("field-error");
+      if(!value){ input.classList.add("field-error"); input.focus(); return; }
+      persistOwnerName(value,{render:true});
+      modal.remove();
+    }
+
+    document.getElementById("cancelChangeOwnerName").onclick=()=>modal.remove();
+    document.getElementById("saveChangeOwnerName").onclick=save;
+    input.addEventListener("keydown",event=>{ if(event.key==="Enter") save(); });
+    modal.addEventListener("click",event=>{ if(event.target===modal) modal.remove(); });
+  };
+
+  function refreshOwnerNameUI(){
+    const name=readOwnerName() || "Nije dodato";
+    document.querySelectorAll(".owner-name-settings-section small").forEach(el=>{ el.textContent=name; });
+    document.querySelectorAll(".access-person-chip").forEach(chip=>{
+      const strong=chip.querySelector("strong");
+      if(strong && strong.textContent.includes("(Ti)")) strong.textContent=(readOwnerName()||"Osoba")+" (Ti)";
+    });
+  }
+
+  const previousRenderDiaryV22=renderDiary;
+  renderDiary=function(){
+    persistOwnerName(readOwnerName());
+    previousRenderDiaryV22();
+    setTimeout(refreshOwnerNameUI,0);
+  };
+
+  // Main share action should not open the old "Kopiraj pozivnicu" modal after the sheet is closed.
+  shareInvite=async function(){
+    try{
+      await safeInviteNamePrompt();
+
+      const code=await createCloudInvite();
+      localStorage.setItem("babyDiaryInviteCode",code);
+
+      const text=inviteMessage();
+      const url=inviteLinkFromCode(code);
+
+      if(navigator.share){
+        try{
+          await navigator.share({title:"Poziv za Baby Diary",text,url});
+          return;
+        }catch(error){
+          // User cancelled native share sheet: do nothing.
+          if(error?.name==="AbortError" || error?.name==="NotAllowedError") return;
+        }
+      }
+
+      try{
+        await navigator.clipboard.writeText(text);
+        toast("Pozivnica je kopirana.");
+      }catch(error){
+        toast("Pozivnica nije kopirana. Prikaži kod i kopiraj poruku ručno.");
+      }
+    }catch(error){
+      console.error(error);
+      showTransferInfoModal("Deljenje nije uspelo", error.message || "Pokušaj ponovo.");
+    }
+  };
+
+  document.addEventListener("click",function(event){
+    const btn=event.target.closest("#sendInviteButton");
+    if(!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    shareInvite();
+  },true);
 })();
