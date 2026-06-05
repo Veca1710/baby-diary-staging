@@ -5794,3 +5794,144 @@ document.addEventListener("click", function(event){
     shareInvite();
   },true);
 })();
+
+/* v24 PATCH: keep activity modal stable during cloud/member refresh + immediate empty onboarding after last baby removal */
+(function(){
+  function isActivityModalOpen(){
+    const modal=document.getElementById("modal");
+    return !!(modal && modal.classList && modal.classList.contains("open"));
+  }
+
+  const originalRenderDiaryV24=renderDiary;
+  renderDiary=function(){
+    if(isActivityModalOpen()){
+      window.__babyDiaryDeferredRender=true;
+      return;
+    }
+    originalRenderDiaryV24();
+  };
+
+  const originalCloseModalV24=closeModal;
+  closeModal=function(){
+    if(typeof originalCloseModalV24==="function") originalCloseModalV24();
+    if(window.__babyDiaryDeferredRender){
+      window.__babyDiaryDeferredRender=false;
+      setTimeout(()=>originalRenderDiaryV24(),0);
+    }
+  };
+
+  if(typeof loadBabyFromCloudById==="function"){
+    const originalLoadBabyFromCloudByIdV24=loadBabyFromCloudById;
+    loadBabyFromCloudById=async function(localBaby,showToast=true){
+      if(isActivityModalOpen()){
+        window.__babyDiaryCloudSkippedDuringModal=true;
+        return;
+      }
+      return originalLoadBabyFromCloudByIdV24(localBaby,showToast);
+    };
+  }
+
+  if(typeof refreshActiveBabyPeopleFromCloud==="function"){
+    const originalRefreshPeopleV24=refreshActiveBabyPeopleFromCloud;
+    refreshActiveBabyPeopleFromCloud=async function(){
+      if(isActivityModalOpen()) return;
+      return originalRefreshPeopleV24();
+    };
+  }
+
+  function closeBabyManagementOverlays(){
+    document.getElementById("removeBabyConfirm")?.remove();
+    document.getElementById("leaveSharedDiaryConfirm")?.remove();
+    document.getElementById("settingsScreen")?.remove();
+    document.getElementById("settingsMenuBackdrop")?.classList?.remove("open");
+    document.querySelectorAll(".settings-row-menu.open").forEach(el=>el.classList.remove("open"));
+  }
+
+  function renderEmptyAfterLastBabyRemoved(message){
+    state.babies=[];
+    selectedBabyId=null;
+    currentDayId=null;
+    openCardId=null;
+    currentTab="diary";
+    localStorage.removeItem("babyDiaryCurrentBabyId");
+    localStorage.setItem(KEY,JSON.stringify(state));
+    closeBabyManagementOverlays();
+    originalRenderDiaryV24();
+    if(message && typeof toast==="function") setTimeout(()=>toast(message),50);
+  }
+
+  goToEmptyBabyState=function(){
+    renderEmptyAfterLastBabyRemoved();
+  };
+
+  removeActiveSharedBabyLocally=function(){
+    const baby=getBaby();
+    const sharedBabyId=baby?.cloud?.sharedBabyId;
+    if(!baby || !sharedBabyId) return false;
+
+    state.babies=(state.babies||[]).filter(b=>b.id!==baby.id);
+
+    try{
+      if(typeof getBabyRemoteKey==="function") localStorage.removeItem(getBabyRemoteKey(sharedBabyId));
+      if(typeof babyEventSeenKey==="function") localStorage.removeItem(babyEventSeenKey(sharedBabyId));
+    }catch(error){}
+
+    if(state.babies.length){
+      selectedBabyId=state.babies[0].id;
+      currentDayId=null;
+      openCardId=null;
+      localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+      localStorage.setItem(KEY,JSON.stringify(state));
+      closeBabyManagementOverlays();
+      originalRenderDiaryV24();
+      if(typeof toast==="function") setTimeout(()=>toast("Beba je uklonjena samo sa ovog telefona."),50);
+    }else{
+      renderEmptyAfterLastBabyRemoved("Beba je uklonjena sa ovog telefona.");
+    }
+    return true;
+  };
+
+  leaveSharedDiaryLocally=function(){
+    return removeActiveSharedBabyLocally();
+  };
+
+  deleteBaby=function(id){
+    const baby=(state.babies||[]).find(b=>b.id===id) || getBaby();
+    if(baby?.cloud?.sharedBabyId){
+      selectedBabyId=baby.id;
+      localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+      if(typeof confirmLeaveSharedDiary==="function") confirmLeaveSharedDiary();
+      return;
+    }
+
+    state.babies=(state.babies||[]).filter(b=>b.id!==id);
+    if(state.babies.length){
+      selectedBabyId=state.babies[0].id;
+      currentDayId=null;
+      openCardId=null;
+      localStorage.setItem("babyDiaryCurrentBabyId",selectedBabyId);
+      saveState();
+      closeBabyManagementOverlays();
+      originalRenderDiaryV24();
+    }else{
+      renderEmptyAfterLastBabyRemoved("Beba je uklonjena.");
+    }
+  };
+
+  removeBaby=function(babyId){
+    deleteBaby(babyId);
+  };
+
+  const originalConfirmLeaveV24=confirmLeaveSharedDiary;
+  confirmLeaveSharedDiary=function(){
+    if(typeof originalConfirmLeaveV24==="function") originalConfirmLeaveV24();
+    setTimeout(()=>{
+      const btn=document.getElementById("confirmLeaveSharedDiary");
+      if(!btn) return;
+      btn.onclick=()=>{
+        document.getElementById("leaveSharedDiaryConfirm")?.remove();
+        removeActiveSharedBabyLocally();
+      };
+    },0);
+  };
+})();
